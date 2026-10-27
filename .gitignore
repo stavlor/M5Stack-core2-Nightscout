@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+include/config.h
+*.bin
+*.elf
