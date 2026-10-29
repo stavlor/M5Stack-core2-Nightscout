@@ -272,6 +272,43 @@ uint64_t timedFingerprint(int64_t now) {
 }
 uint64_t renderedPayload=0,renderedTimed=0;
 bool rendered=false;
+void drawPowerIndicator(bool force=false) {
+  static bool sampled=false,charging=false;
+  static uint32_t sampledAt=0;
+  static int level=-1,source=0;
+  static int shownLevel=-999,shownSource=-999,shownCharging=-1;
+  uint32_t tick=millis();
+  if (!sampled || tick-sampledAt>=5000) {
+    sampled=true;sampledAt=tick;
+    bool battery=true,usb=false,external=false;
+    if (M5.Power.getType()==m5::Power_Class::pmic_axp192) {
+      // Core2 v1.3: use input-presence flags, not charging state, so
+      // externally powered + fully charged is still correctly identified.
+      usb=M5.Power.Axp192.isVBUS();external=M5.Power.Axp192.isACIN();
+      battery=M5.Power.Axp192.getBatState();charging=M5.Power.Axp192.isCharging();
+    } else {
+      usb=M5.Power.getVBUSVoltage()>=4000;
+      charging=M5.Power.isCharging()==m5::Power_Class::is_charging;
+    }
+    level=battery?M5.Power.getBatteryLevel():-1;
+    if (level<0) level=-1;else level=std::min(level,100);
+    source=usb?1:external?2:0;
+  }
+  if (!force && level==shownLevel && source==shownSource && int(charging)==shownCharging) return;
+  shownLevel=level;shownSource=source;shownCharging=charging;
+  M5.Display.fillRect(200,0,64,12,TFT_BLACK);
+  uint16_t color=source?TFT_GREEN:level<0?TFT_LIGHTGREY:level<=20?TFT_RED:TFT_WHITE;
+  M5.Display.drawRect(201,2,14,8,color);
+  M5.Display.fillRect(215,4,2,4,color);
+  if (level>=0) {
+    int fill=level?std::max(1,(level*10+50)/100):0;
+    if (fill) M5.Display.fillRect(203,4,fill,4,color);
+  } else M5.Display.drawFastHLine(205,6,5,color);
+  String text=source==1?"USB":source==2?"EXT":level>=0?String(level)+"%":"--%";
+  if (source && charging) text+="+";
+  M5.Display.setTextSize(1);M5.Display.setTextColor(color,TFT_BLACK);
+  M5.Display.setCursor(221,2);M5.Display.print(text);
+}
 void drawLiveFields(int64_t now,bool force=false) {
   static char previousClock[9]={};
   static String previousAge,previousLoop;
@@ -424,6 +461,7 @@ void draw() {
   String err=*ui.glucoseError?String("SGV: ")+ui.glucoseError:*ui.statusError?String("AAPS: ")+ui.statusError:*ui.treatmentError?String("Treat: ")+ui.treatmentError:ui.treatments.limited?"Treatments limited; reduce graph hours":"A refresh  B units  C forecasts";
   line(layout::FOOTER_Y,err,TFT_ORANGE);
   drawLiveFields(now,true);
+  drawPowerIndicator(true);
   renderedPayload=payloadFingerprint();renderedTimed=timedFingerprint(now);rendered=true;
 }
 void setup() {
@@ -455,5 +493,6 @@ void loop() {
   if (!rendered || dataChanged || timedChanged || unitsPressed || forecastPressed) draw();
   else if (newSecond) drawLiveFields(now);
   lastCheckedSecond=now;
+  drawPowerIndicator();
   delay(10);
 }
