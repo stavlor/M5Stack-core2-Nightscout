@@ -14,7 +14,7 @@ Current behavior, 2026-10-29.
 - IOB/COB, then reported basal and right-aligned `Mode`. Long mode text is shortened.
 - Footer A/B/C labels or prioritized error text, with data activity at the right.
 
-Glucose uses 4x text. Plot bounds are y=72..160, time labels 184, IOB/COB 194,
+Glucose uses 4x text. Plot bounds are y=72..152, time labels 184, IOB/COB 194,
 basal/mode 216 and footer 231 on the 320x240 landscape display.
 
 ## Controls

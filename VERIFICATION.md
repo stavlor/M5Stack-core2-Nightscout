@@ -6,8 +6,8 @@ Reviewed 2026-10-29 against the current source and local evidence.
 
 | Area | Evidence | Limit |
 | --- | --- | --- |
-| Host regression suite | Local `work/last-parser-tests.log`: 73 passed, 0 failed | Does not emulate display, radio, TLS, touch or speaker hardware |
-| Current ESP32 build output | `firmware.bin` and `firmware.elf` exist and were written after current main.cpp; binary size 1,173,584 bytes | File evidence does not prove successful upload or complete physical validation |
+| Earlier host regression suite | Local `work/last-parser-tests.log`: 73 passed, 0 failed | Does not emulate display, radio, TLS, touch or speaker hardware |
+| Earlier ESP32 build output | Prior `firmware.bin` and `firmware.elf`, binary size 1,173,584 bytes, predate the SMB label changes | File evidence does not prove successful upload or complete physical validation |
 | Live v3 authentication | Approved probe exchanged saved subject token for a JWT using validated HTTPS | Does not exercise expiry over time on the ESP32 |
 | Live v3 data queries | All three collections returned HTTP 200 with valid status/result arrays; AAPS snapshot and SGV date/value fields present | Point-in-time compatibility check |
 | Baseline physical operation | User confirmed earlier firmware worked on Core2 and supplied working screen images | Not independent confirmation of every current feature |
@@ -20,12 +20,12 @@ probe. The bundled CA and hostname checks succeeded. A generic Python user-agent
 first received 403; repeating with ESP32HTTPClient succeeded, and firmware now
 explicitly uses that user-agent on auth and data requests.
 
-The agent's native compiler process could not launch in the restricted session.
-The host log and current build artifacts above were subsequently observed on the
-user's workstation; they replace earlier documentation saying all new tests
-were still unexecuted. No new firmware source change was made in this documentation
-cleanup. The latest upload result and full current-device acceptance remain
-unconfirmed here.
+The native compiler process could not launch in this restricted session. The
+observed 73-pass host log and earlier build predate the new SMB label layout.
+The current suite contains 79 checks, including six new layout checks for two-row
+placement, summed groups, bounds, dense capacity and reset. These additions and
+the updated firmware still need compilation/execution with Flash-Core2.cmd.
+Device legibility and grouping should be confirmed after upload.
 
 ## Pinned build components
 

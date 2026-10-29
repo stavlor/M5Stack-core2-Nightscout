@@ -14,6 +14,7 @@
 #include "power_state.h"
 #include "ns_settings.h"
 #include "ns_api.h"
+#include "smb_labels.h"
 #if __has_include("config.h")
 #include "config.h"
 #else
@@ -46,7 +47,7 @@ uint32_t lastAppliedAt=0;
 bool haveApplied=false;
 enum class Resource {Glucose,Status,Treatments};
 namespace layout {
-constexpr int PLOT_TOP=72, PLOT_BOTTOM=160;
+constexpr int PLOT_TOP=72, PLOT_BOTTOM=152;
 constexpr int LEGEND_Y=52, FORECAST_LEGEND_Y=62, TIME_Y=184;
 constexpr int IOB_Y=194, BASAL_Y=216, FOOTER_Y=231;
 }
@@ -561,7 +562,7 @@ void draw() {
   auto label=[&](int x,int y,const String &text,uint16_t color) {
     M5.Display.setTextColor(color,TFT_BLACK);M5.Display.setCursor(x,y);M5.Display.print(text);
   };
-  label(30,layout::LEGEND_Y,"C carbs(g)",TFT_ORANGE);label(104,layout::LEGEND_Y,"S SMB(U)",TFT_CYAN);label(167,layout::LEGEND_Y,"B bolus(U)",TFT_LIGHTGREY);
+  label(30,layout::LEGEND_Y,"C carbs(g)",TFT_ORANGE);label(104,layout::LEGEND_Y,"SMB(U)",TFT_CYAN);label(167,layout::LEGEND_Y,"B bolus(U)",TFT_LIGHTGREY);
   if (predicted) {
     const char *keys[]={"IOB","COB","UAM","ZT"};
     const uint16_t colors[]={TFT_MAGENTA,TFT_ORANGE,TFT_YELLOW,TFT_CYAN};
@@ -603,22 +604,51 @@ void draw() {
   const int treatmentLine=(cfg::LOW_MGDL>=low && cfg::LOW_MGDL<=high)?yy(cfg::LOW_MGDL):layout::PLOT_BOTTOM;
   const int carbMarkerY=std::max(layout::PLOT_TOP+3,treatmentLine-5);
   const int insulinMarkerY=std::max(layout::PLOT_TOP+3,treatmentLine-12);
-  int lastCarbLabel=0,lastInsulinLabel=0;
+  const int labelLeft=30,labelRight=std::min(314,xx(now));
+  int lastCarbLabel=labelLeft;
+  static smblabels::Layout smbLabels;
+  smbLabels.reset();
   for (size_t i=0;i<ui.treatments.count;++i) {
     const auto &e=ui.treatments.events[i];if (e.t<start || e.t>now) continue;
     int x=xx(e.t);
     if (e.carbs>0) {
       M5.Display.fillTriangle(x,carbMarkerY-2,x-2,carbMarkerY+2,x+2,carbMarkerY+2,TFT_ORANGE);
       String text="C"+compactAmount(e.carbs);
-      int width=text.length()*6,tx=std::min(x+4,314-width);
-      if (tx>=lastCarbLabel) {label(tx,treatmentLine+3,text,TFT_ORANGE);lastCarbLabel=tx+width+3;}
+      int width=M5.Display.textWidth(text),tx=std::max(labelLeft,std::min(x-width/2,labelRight+1-width));
+      if (tx>=lastCarbLabel) {label(tx,treatmentLine+2,text,TFT_ORANGE);lastCarbLabel=tx+width+3;}
     }
     if (e.insulin>0) {
-      uint16_t color=e.smb?TFT_CYAN:TFT_LIGHTGREY;
-      M5.Display.fillCircle(x,insulinMarkerY,e.smb?2:1,color);
-      String text=String(e.smb?"S":"B")+compactAmount(e.insulin);
-      int width=text.length()*6,tx=std::min(x+4,314-width);
-      if (tx>=lastInsulinLabel) {label(tx,treatmentLine+12,text,color);lastInsulinLabel=tx+width+3;}
+      M5.Display.fillCircle(x,insulinMarkerY,e.smb?2:1,e.smb?TFT_CYAN:TFT_LIGHTGREY);
+      if (e.smb) smbLabels.add(x,e.insulin);
+    }
+  }
+  auto smbText=[&](const smblabels::Group &group) {
+    String text=compactAmount(group.units);
+    if (group.count>1) text="="+text;
+    return text;
+  };
+  bool labelsFit=smbLabels.arrange(labelLeft,labelRight,[&](const smblabels::Group &g){return M5.Display.textWidth(smbText(g));});
+  if (labelsFit) for (size_t i=0;i<smbLabels.size;++i) {
+    const auto &g=smbLabels.groups[i];int y=treatmentLine+13+g.lane*11;
+    if (g.count>1) {
+      M5.Display.drawFastHLine(g.first,y-2,g.last-g.first+1,TFT_CYAN);
+      M5.Display.drawFastVLine(g.first,y-3,2,TFT_CYAN);
+      M5.Display.drawFastVLine(g.last,y-3,2,TFT_CYAN);
+    } else M5.Display.drawLine(g.first,y-3,g.x+g.width/2,y-1,TFT_CYAN);
+    label(g.x,y,smbText(g),TFT_CYAN);
+  }
+  // Keep non-SMB boluses distinct; never include them in a cyan SMB total.
+  int lastBolusEnd[2]={labelLeft,labelLeft};
+  for (size_t i=0;i<ui.treatments.count;++i) {
+    const auto &e=ui.treatments.events[i];
+    if (e.smb || e.insulin<=0 || e.t<start || e.t>now) continue;
+    int x=xx(e.t);String text="B"+compactAmount(e.insulin);
+    int width=M5.Display.textWidth(text),tx=std::max(labelLeft,std::min(x-width/2,labelRight+1-width));
+    for (int row=0;row<2;++row) if (tx>=lastBolusEnd[row] &&
+        (!labelsFit || !smbLabels.overlaps(row,tx,width))) {
+      int y=treatmentLine+13+row*11;
+      M5.Display.drawLine(x,y-3,tx+width/2,y-1,TFT_LIGHTGREY);
+      label(tx,y,text,TFT_LIGHTGREY);lastBolusEnd[row]=tx+width+3;break;
     }
   }
   label(30,layout::TIME_Y,"-"+String(cfg::GRAPH_HOURS)+"h",TFT_LIGHTGREY);

@@ -5,6 +5,7 @@
 #include "alerts.h"
 #include "power_state.h"
 #include "ns_api.h"
+#include "smb_labels.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -238,6 +239,39 @@ inline int runParserTests() {
     check(!nsapi::tokenResponse(doc.as<JsonVariantConst>(),now,token,expires),"JWT header-injection characters are rejected");
     deserializeJson(doc,R"({"token":"aaa..ccc","exp":1793106000})");
     check(!nsapi::tokenResponse(doc.as<JsonVariantConst>(),now,token,expires),"Empty JWT segments are rejected");
+  }
+  {
+    static smblabels::Layout labels;
+    auto width=[](const smblabels::Group &g){return g.count>1?30:24;};
+    auto valid=[&](){
+      for(size_t i=0;i<labels.size;++i) {
+        const auto &a=labels.groups[i];
+        if(a.x<30 || a.x+a.width>201) return false;
+        for(size_t j=i+1;j<labels.size;++j) {
+          const auto &b=labels.groups[j];
+          if(a.lane==b.lane && a.x<b.x+b.width+3 && b.x<a.x+a.width+3) return false;
+        }
+      }
+      return true;
+    };
+    labels.add(60,0.2f);labels.add(160,0.3f);
+    check(labels.arrange(30,200,width) && labels.size==2 && valid(),"Isolated SMB labels remain separate and bounded");
+    labels.reset();labels.add(100,0.2f);labels.add(101,0.3f);
+    check(labels.arrange(30,200,width) && labels.size==2 && labels.groups[0].lane!=labels.groups[1].lane && valid(),
+      "Two close SMBs use separate label rows before combining");
+    labels.add(102,0.4f);
+    bool arranged=labels.arrange(30,200,width);float sum=0;unsigned count=0;bool span=false;
+    for(size_t i=0;i<labels.size;++i){const auto &g=labels.groups[i];sum+=g.units;count+=g.count;span|=g.count>1 && g.last>g.first;}
+    check(arranged && labels.size==2 && valid() && fabsf(sum-0.9f)<0.0001f && count==3 && span,
+      "Crowded SMB labels combine adjacent amounts while preserving count and timestamp span");
+    labels.reset();labels.add(30,0.1f);labels.add(200,0.2f);
+    check(labels.arrange(30,200,width) && valid(),"Edge labels stay inside history pane");
+    labels.reset();for(unsigned i=0;i<128;++i)labels.add(30+i,0.1f);
+    arranged=labels.arrange(30,200,width);sum=0;count=0;
+    for(size_t i=0;i<labels.size;++i){sum+=labels.groups[i].units;count+=labels.groups[i].count;}
+    check(arranged && valid() && count==128 && fabsf(sum-12.8f)<0.001f,
+      "Full treatment capacity fits without overlapping labels or losing dose totals");
+    labels.reset();check(labels.size==0 && labels.arrange(30,200,width),"New snapshot clears prior SMB label groups");
   }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;
