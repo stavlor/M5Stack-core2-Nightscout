@@ -10,11 +10,18 @@ enum class Event {None,Low,High};
 class State {
   Event band=Event::None;
   bool announced=false;
+  bool enabled=true;
   uint32_t lastLow=0;
 public:
+  bool isEnabled() const {return enabled;}
+  void setEnabled(bool value) {
+    if (value==enabled) return;
+    enabled=value;
+    if (enabled) {band=Event::None;announced=false;}
+  }
   Event poll(float mgdl,bool fresh,uint32_t tick) {
     // Missing/stale samples suppress sound without re-arming the episode.
-    if (!fresh || !std::isfinite(mgdl) || mgdl<20 || mgdl>600) return Event::None;
+    if (!enabled || !fresh || !std::isfinite(mgdl) || mgdl<20 || mgdl>600) return Event::None;
     Event next=mgdl<LOW_MGDL?Event::Low:mgdl>HIGH_MGDL?Event::High:Event::None;
     if (next!=band) {band=next;announced=false;}
     if (band==Event::None) return Event::None;
@@ -24,7 +31,7 @@ public:
   }
   // Consume an alert only after the speaker accepts the tone.
   void played(Event event,uint32_t tick) {
-    if (event==Event::None || event!=band) return;
+    if (!enabled || event==Event::None || event!=band) return;
     announced=true;
     if (event==Event::Low) lastLow=tick;
   }

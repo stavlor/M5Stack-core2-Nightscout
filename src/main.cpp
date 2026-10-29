@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
+#include <Preferences.h>
 #include "body_buffer.h"
 #include "model.h"
 #include "treatments.h"
@@ -33,6 +34,9 @@ QueueHandle_t updates;
 TaskHandle_t networkTask;
 bool mmol=cfg::MMOL;
 bool showForecast=true;
+alerts::State glucoseAlerts;
+Preferences alertPreferences;
+bool alertPreferencesReady=false;
 enum class Resource {Glucose,Status,Treatments};
 namespace layout {
 constexpr int PLOT_TOP=72, PLOT_BOTTOM=160;
@@ -273,6 +277,22 @@ uint64_t timedFingerprint(int64_t now) {
 }
 uint64_t renderedPayload=0,renderedTimed=0;
 bool rendered=false;
+void drawSpeakerIndicator(bool force=false) {
+  static int previous=-1;
+  bool enabled=glucoseAlerts.isEnabled();
+  if (!force && previous==int(enabled)) return;
+  previous=enabled;
+  M5.Display.fillRect(174,0,26,14,TFT_BLACK);
+  uint16_t color=enabled?TFT_CYAN:TFT_DARKGREY;
+  M5.Display.fillRect(179,4,4,5,color);
+  M5.Display.fillTriangle(182,4,188,1,188,11,color);
+  if (enabled) {
+    M5.Display.drawLine(191,3,193,5,color);
+    M5.Display.drawLine(193,5,193,8,color);
+    M5.Display.drawLine(193,8,191,10,color);
+    M5.Display.drawPixel(190,6,color);
+  } else M5.Display.drawLine(178,1,197,12,TFT_RED);
+}
 void drawPowerIndicator(bool force=false) {
   static bool sampled=false,charging=false;
   static uint32_t sampledAt=0;
@@ -487,28 +507,38 @@ void draw() {
   String err=*ui.glucoseError?String("SGV: ")+ui.glucoseError:*ui.statusError?String("AAPS: ")+ui.statusError:*ui.treatmentError?String("Treat: ")+ui.treatmentError:ui.treatments.limited?"Treatments limited; reduce graph hours":"A refresh  B units  C forecasts";
   line(layout::FOOTER_Y,err,TFT_ORANGE);
   drawLiveFields(now,true);
+  drawSpeakerIndicator(true);
   drawPowerIndicator(true);
   drawWifiIndicator(true);
   renderedPayload=payloadFingerprint();renderedTimed=timedFingerprint(now);rendered=true;
 }
 void updateGlucoseAlerts(int64_t now) {
-  static alerts::State state;
   static bool retrying=false;
   static alerts::Event retryEvent=alerts::Event::None;
   static uint32_t lastAttempt=0;
   uint32_t tick=millis();
   bool have=ui.history.count>0;
   model::Point latest=have?ui.history.p[ui.history.count-1]:model::Point{};
-  alerts::Event event=state.poll(latest.sgv,
+  alerts::Event event=glucoseAlerts.poll(latest.sgv,
     have && model::fresh(latest.t,now,cfg::SGV_STALE_SECONDS),tick);
   if (event==alerts::Event::None) {retrying=false;return;}
   if (retrying && retryEvent==event && uint32_t(tick-lastAttempt)<30000) return;
   lastAttempt=tick;retryEvent=event;
   if (M5.Speaker.tone(alerts::CHIRP_HZ,alerts::CHIRP_MS)) {
-    state.played(event,tick);retrying=false;
+    glucoseAlerts.played(event,tick);retrying=false;
   } else {
     retrying=true;Serial.println("Glucose chirp could not be queued; will retry while fresh.");
   }
+}
+void toggleGlucoseAlerts() {
+  bool enabled=!glucoseAlerts.isEnabled();
+  glucoseAlerts.setEnabled(enabled);
+  if (!enabled) M5.Speaker.stop();
+  if (alertPreferencesReady && !alertPreferences.putBool("alerts-on",enabled))
+    Serial.println("Could not save alert toggle; current session setting still applies.");
+  drawSpeakerIndicator(true);
+  // Muting clears retries immediately; enabling evaluates the current fresh SGV.
+  updateGlucoseAlerts(displayNow());
 }
 void setup() {
   auto c=M5.config(); c.internal_imu=false; c.internal_mic=false;
@@ -524,6 +554,8 @@ void setup() {
   runParserTests();
   for (;;) delay(1000);
 #endif
+  alertPreferencesReady=alertPreferences.begin("ns-display",false);
+  if (alertPreferencesReady) glucoseAlerts.setEnabled(alertPreferences.getBool("alerts-on",true));
   updates=xQueueCreate(1,sizeof(Snapshot));
   if (!updates || xTaskCreatePinnedToCore(worker,"network",49152,nullptr,1,&networkTask,0)!=pdPASS) {
     line(20,"Memory/task allocation failed",TFT_RED); for (;;) delay(1000);
@@ -532,6 +564,12 @@ void setup() {
 }
 void loop() {
   M5.update();
+  for (size_t i=0;i<M5.Touch.getCount();++i) {
+    const auto &touch=M5.Touch.getDetail(i);
+    if (touch.wasPressed() && touch.x>=174 && touch.x<200 && touch.y>=0 && touch.y<28) {
+      toggleGlucoseAlerts();break;
+    }
+  }
   if (M5.BtnA.wasPressed()) xTaskNotifyGive(networkTask);
   bool unitsPressed=M5.BtnB.wasPressed(), forecastPressed=M5.BtnC.wasPressed();
   if (unitsPressed) mmol=!mmol;

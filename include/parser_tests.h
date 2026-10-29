@@ -154,6 +154,22 @@ inline int runParserTests() {
       a.poll(60,true,uint32_t(start+alerts::LOW_REPEAT_MS))==alerts::Event::Low,
       "Low repeat timing survives the millis counter wrap");
   }
+  {
+    alerts::State a;a.setEnabled(false);
+    check(!a.isEnabled() && a.poll(60,true,0)==alerts::Event::None &&
+      a.poll(200,true,1)==alerts::Event::None,"Muted alerts suppress both low and high chirps");
+    a.setEnabled(true);bool initialHigh=a.poll(200,true,2)==alerts::Event::High;
+    a.played(alerts::Event::High,2);
+    check(a.isEnabled() && initialHigh && a.poll(200,true,3)==alerts::Event::None,
+      "Re-enabling evaluates current fresh glucose once");
+    a.setEnabled(true);
+    check(a.poll(200,true,4)==alerts::Event::None,"Setting an already-enabled toggle does not re-arm highs");
+    a.setEnabled(false);bool silent=a.poll(60,true,900000)==alerts::Event::None;
+    a.setEnabled(true);bool initialLow=a.poll(60,true,900001)==alerts::Event::Low;
+    a.played(alerts::Event::Low,900001);
+    check(silent && initialLow && a.poll(60,true,900002)==alerts::Event::None,
+      "Mute blocks low reminders; re-enable starts a fresh low reminder interval");
+  }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;
 }

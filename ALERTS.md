@@ -1,3 +1,7 @@
+Latest alert control: tap the small speaker icon immediately left of the power indicator to toggle all glucose chirps. Blue means enabled; a red slash means muted. Muting stops any tone already playing. The setting is saved locally in ESP32 Preferences and restored after reboot (default enabled on first use). Re-enabling re-arms the current episode: a fresh out-of-range reading chirps immediately, while stale data stays silent; low repeats then restart from that chirp. A/B/C controls are unchanged. The touch target is the header area x174-199, y0-27, separate from the age labels and bottom buttons.
+
+Added four mute/re-enable state checks to the pre-flash suite. Touch and Preferences API signatures were checked against installed pinned libraries; test execution, updated build, persisted-setting and physical touch/audio verification remain pending on the user PC.
+
 # Glucose chirps
 
 The Core2's built-in speaker now plays one short 180 ms, 1800 Hz chirp at volume
