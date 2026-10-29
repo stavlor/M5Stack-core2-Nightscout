@@ -1,51 +1,96 @@
-Latest trend rendering: ASCII combinations have been replaced with native filled graphic arrows. Up, down, horizontal, proper 45-degree diagonals and paired double arrows are drawn with filled shafts and arrowheads, using the glucose color. The arrow sits beside the large glucose value within its existing header space. Unknown/uncomputable directions still show a question mark. No bitmap downloads or font dependencies are required. Graph, clock and partial-redraw behavior are unchanged. Firmware build and physical arrow appearance remain pending through Flash-Core2.cmd.
+# Display and controls
 
-Latest data activity indicator: the lower right, on the A/B/C footer baseline, now shows a cyan GET spinner while a network polling cycle is running. After the UI receives the completed snapshot, it briefly shows green UPD with a checkmark, or orange ERR when an endpoint reported an error. A dim dot denotes idle between polls. The spinner redraws only its small 42x11 rectangle every 150 ms; the graph stays unchanged. Footer messages are shortened with an ellipsis when needed to keep the indicator clear. Cross-task busy state uses a C++ atomic; all display writes remain on the UI task. The existing pre-flash checks remain unchanged; updated build and physical icon/timing verification are pending through Flash-Core2.cmd.
+Current behavior, 2026-10-29.
 
-Power disconnect correction: source detection now requires AXP192 input-present AND usable status, at least 4.0 V, and measured input current above 1 mA. This replaces the original presence-only check, preventing a lingering/backfed voltage from being reported as USB supply. Fully charged operation does not require the charging flag. Power is now sampled once per second. Failed status-register reads show an unknown source rather than a retained USB label. Only PMIC status/ADC registers are read; power-routing and charging settings are not changed.
+## Layout
 
-Register definitions were checked in the manufacturer datasheet hosted by M5Stack: https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/docs/datasheet/core/AXP192_datasheet_cn.pdf (REG00/REG01 and VBUS/ACIN ADC registers). ADC initialization was checked in pinned M5Unified (all ADC channels enabled). Added seven classification fixtures to the pre-flash suite. Those new tests, firmware build and physical unplug/reconnect verification remain pending on the user PC. After reflash, unplug USB, wait about one second and confirm the battery percentage appears; reconnect and confirm USB/USB+.
+- Large glucose value with filled graphical up/down/flat/diagonal/double arrows;
+  unknown or uncomputable trends show `?`. SGV is mg/dL internally; mmol/L uses
+  a conversion factor of 18.0182.
+- Upper-right HH:MM:SS clock, plus speaker, power and Wi-Fi indicators.
+- Gray glucose `Age` and blue AAPS calculation `Age` side by side above forecasts.
+  There is no separate Suggested/status-age row.
+- History and optional future pane, with treatment markers at the lower threshold.
+- IOB/COB, then reported basal and right-aligned `Mode`. Long mode text is shortened.
+- Footer A/B/C labels or prioritized error text, with data activity at the right.
 
-Latest Wi-Fi indicator: four compact signal bars now sit between power status and the clock. Green indicates stronger signal, yellow/orange weaker signal, and a red cross indicates Wi-Fi disconnected. Connected devices with an unavailable RSSI show gray bars. Signal is sampled once per second; only the icon redraws when its connection state or bar count changes. Wi-Fi association does not prove Nightscout/API connectivity; existing endpoint errors still provide that status.
+Glucose uses 4x text. Plot bounds are y=72..160, time labels 184, IOB/COB 194,
+basal/mode 216 and footer 231 on the 320x240 landscape display.
 
-The Core2 v1.3 has a built-in speaker and NS4168 I2S amplifier, documented at https://docs.m5stack.com/en/core/Core2_v1.3 . Speaker initialization remains disabled and no audible alerts were added in this revision; sound can be enabled in a future alert feature. Wi-Fi status/RSSI signatures were checked against the pinned Arduino ESP32 library. Build and physical icon checks remain pending through Flash-Core2.cmd.
+## Controls
 
-Latest power indicator: a small battery icon now appears to the left of the upper-right clock. On battery it shows an approximate percentage, with red below or at 20 percent. External USB power shows green USB (including a USB wall adapter), or EXT for the AXP192 separate external-input flag. A plus sign means actively charging; externally powered but fully charged still shows USB/EXT without the plus. Unknown/absent battery shows an unfilled icon and an unknown percentage when no external power is detected. The hardware cannot distinguish a USB wall adapter from a USB computer port.
+| Control | Action |
+| --- | --- |
+| A, lower left | Request refresh |
+| B, center | Toggle mg/dL / mmol/L until reboot |
+| C, lower right | Toggle forecasts until reboot; initially enabled |
+| Speaker icon left of power | Toggle glucose chirps; saved across reboot |
 
-Power is sampled every five seconds independently of the clock and Nightscout. Only the indicator rectangle redraws when its displayed state changes. The AXP192 input, battery-presence and charge APIs were checked in the pinned M5Unified source. Rebuild and physical USB/battery checks remain pending through Flash-Core2.cmd.
+Speaker cyan/blue means enabled; a red slash means muted. Its touch area is
+x174..199, y0..27. A press toggles once; holding does not repeatedly toggle.
+Muting stops the current tone. Re-enabling evaluates the current fresh reading.
+See [ALERTS.md](ALERTS.md).
 
-Latest space allocation: glucose and trend use 4x text instead of 3x. The plot extends from y=72 to y=160 (88-pixel span, formerly 56), using the freed lower status area. Time labels are at y=184, IOB/COB at y=194, basal/right-aligned Mode at y=216, and footer at y=231. Clock and age positions remain at the upper right. Marker/forecast clipping and threshold placement use the enlarged plot bounds. Physical layout verification and the firmware build remain pending through Flash-Core2.cmd.
+## Clock and small indicators
 
-Latest layout: the upper-right age row now shows glucose Age in gray on the left and AAPS calculation Age in bright blue on the right, above the forecast area. The separate AAPS Suggested/status-age row is removed. Mode is right-aligned on the basal-rate row, with long mode text truncated to prevent overlap. These changes supersede older status-row descriptions below. The updated firmware build and physical layout check remain pending through Flash-Core2.cmd.
+The timezone is in `include/display_settings.h`: default
+`EST5EDT,M3.2.0/2,M11.1.0/2` for Eastern time with automatic US DST. Use `UTC0`
+for UTC or another POSIX rule as needed. API timestamps remain UTC epoch values.
+Clock dashes indicate that the UI has not received a valid time anchor yet.
 
-# Display refresh and clock
+**Power:** approximate battery percentage when on battery; green USB/EXT when
+that external input supplies power; plus sign while charging. Battery at or
+below 20% is red without external power. Unknown input shows `?`; unavailable
+battery level shows `--%` when on battery. USB wall adapters and computer ports
+cannot be distinguished.
 
-The full dashboard now redraws only when its data/error payload changes, a
-visible freshness/expiry state changes, a history item enters/leaves the graph
-window, or the user toggles units/forecasts. Identical polls no longer trigger
-full repaints. The graph does not scroll/repaint just because the clock ticks.
-Polling frequency and stale-data thresholds remain configured as before.
+Core2 v1.3 uses AXP192 present/usable flags plus at least 4 V and more than 1 mA
+incoming current. Charging alone is not used to classify external supply; a full
+battery can still show USB. Failed status reads show unknown. The firmware only
+reads PMIC status/ADC registers and does not alter routing/charging configuration.
+Power is sampled once per second.
 
-The upper-right clock displays HH:MM:SS. Only its small rectangle updates each
-second. Glucose and AAPS age labels update their own rectangles when their text
-changes, normally once per minute. Staleness and temp-basal expiry still update
-even if no new server data arrives. The clock shows dashes before time sync.
+**Wi-Fi:** 1-4 bars, green for stronger and yellow/orange for weaker signal.
+Disconnected is a red cross; connected with unavailable RSSI shows gray bars.
+It is sampled once per second. Wi-Fi association does not prove Nightscout access.
 
-Timezone is configured in include/display_settings.h. Its default is Eastern
-America/New_York, using EST5EDT,M3.2.0/2,M11.1.0/2 for automatic US daylight-saving
-time. Set TIMEZONE to UTC0 for UTC, or to another POSIX TZ rule if needed. API
-and freshness calculations remain based on UTC epoch timestamps.
+## Activity indicator
 
-Changed-payload comparisons exclude poll clock anchors, struct padding and
-unused array capacity. NaNs and signed zeros are normalized. The fingerprint is
-only a display invalidation optimization, not a security check.
+| Indicator, lower right | Meaning |
+| --- | --- |
+| Cyan GET + spinner | Network polling cycle, including connection/fetch work |
+| Green UPD + check | Completed successful snapshot applied; brief pulse |
+| Orange ERR | Completed cycle reported an endpoint error; brief pulse |
+| Dim dot | Idle between polls |
 
-Verification: configTzTime and localtime_r APIs were checked against the installed
-ESP32 Arduino framework. The existing 29 pre-flash regression checks remain in
-the local flash script. This session cannot run the compiler; the updated firmware
-build and physical verification remain pending through Flash-Core2.cmd.
+Only its 42x11 rectangle animates every 150 ms while busy. Completion pulses last
+500 ms. A successful HTTP cycle does not itself establish freshness; the values'
+own ages still apply. Long footer text is ellipsized to avoid overlap.
 
-After upload, verify that the graph stays still while seconds advance, identical
-polls do not flash the screen, B/C still redraw immediately, and old data becomes
-stale on schedule after network loss. Check the displayed local time against a
-clock set to Eastern time.
+## Refresh, colors and status
+
+The full dashboard redraws when data/error content changes, a visible freshness
+or expiry state changes, a history item enters/leaves the window, or B/C changes
+its setting. Identical polls do not repaint the graph. Clock seconds, age text,
+power, Wi-Fi, speaker and activity update independent small rectangles. The graph
+does not continuously scroll between full redraws.
+
+Glucose points and interpolated segments are green in range, orange above and
+red below display thresholds. Stale history is gray. Default freshness is ten
+minutes; old SGV shows STALE with advancing age. Missing values show `--` and
+unknown ages/mode are explicit. Valid empty results clear data; errors retain it.
+
+IOB/COB and basal use calculation/pump timestamps, not upload freshness. Temp
+basal requires a valid absolute rate and positive remaining duration; otherwise
+reported base basal is shown. A temp expires at upload time plus reported
+remaining minutes and becomes unknown until a new report. Suggested rates and
+extended boluses are not added to basal. This is an uploaded snapshot, not proof
+of current delivery.
+
+Mode is the pump's uploaded `status.status` text. It is not inferred from an
+OpenAPS suggestion; `normal` does not establish closed-loop mode. Stale/missing
+pump mode shows Unknown/stale.
+
+The LCD stays on. There is no Wi-Fi alarm or persistent health-data cache.
+Treatments/forecasts are described in [OVERLAYS.md](OVERLAYS.md); glucose chirps
+in [ALERTS.md](ALERTS.md). Verification status is in [VERIFICATION.md](VERIFICATION.md).

@@ -1,42 +1,45 @@
-Latest alert control: tap the small speaker icon immediately left of the power indicator to toggle all glucose chirps. Blue means enabled; a red slash means muted. Muting stops any tone already playing. The setting is saved locally in ESP32 Preferences and restored after reboot (default enabled on first use). Re-enabling re-arms the current episode: a fresh out-of-range reading chirps immediately, while stale data stays silent; low repeats then restart from that chirp. A/B/C controls are unchanged. The touch target is the header area x174-199, y0-27, separate from the age labels and bottom buttons.
+# Glucose chirps and mute control
 
-Added four mute/re-enable state checks to the pre-flash suite. Touch and Preferences API signatures were checked against installed pinned libraries; test execution, updated build, persisted-setting and physical touch/audio verification remain pending on the user PC.
+The built-in speaker plays one non-blocking 180 ms, 1800 Hz chirp at volume
+80/255 for a fresh out-of-range SGV, when alerts are enabled.
 
-# Glucose chirps
+| Glucose | Behavior |
+| --- | --- |
+| Below 70 mg/dL | First-occurrence chirp; repeat every 15 minutes while fresh and low |
+| 70 through 180 inclusive | Silent; re-arm the next out-of-range episode |
+| Above 180 mg/dL | First-occurrence chirp; no repeat while high continues |
 
-The Core2's built-in speaker now plays one short 180 ms, 1800 Hz chirp at volume
-80/255 when a fresh glucose reading is below 70 or above 180 mg/dL. Thresholds
-are evaluated in mg/dL internally, independently of the displayed glucose unit.
-Exactly 70 and 180 are in range.
+A direct high-to-low or low-to-high transition chirps for the newly entered band.
+The sound thresholds are mg/dL regardless of display units. They are defined in
+`include/alerts.h`, separately from the display thresholds in config.h. That
+header also holds volume, tone length/frequency and low repeat interval.
 
-Low: chirp at first occurrence, then every 15 minutes while fresh readings remain
-low. High: chirp at first occurrence with no repeat while the high continues.
-Returning to 70-180 re-arms the next out-of-range episode. A direct transition
-from high to low or low to high chirps for the newly entered band.
+## Speaker touch toggle
 
-Only actual current SGV is used. Forecasts, missing values, invalid sensor values
-and stale data never trigger a chirp. A Wi-Fi outage or stale period does not
-re-arm a high episode. If a low reminder becomes due while data is stale, it
-waits for a fresh low reading. The timer uses a monotonic counter, independent
-of timezone, NTP adjustments and counter wrap. Episodes reset after a reboot;
-a fresh out-of-range reading after boot therefore chirps once.
+Tap the speaker icon just left of the power indicator. Cyan/blue means enabled;
+a red slash means muted. Muting stops an existing tone and blocks further chirps.
+The enabled setting is stored in ESP32 Preferences (`ns-display`, `alerts-on`)
+and restored after reboot; first use is enabled. If saving fails, serial reports
+it and the current session's setting still applies.
 
-The tone is non-blocking. A failed tone request does not consume the alert;
-failed requests retry at most every 30 seconds while the triggering data remains
-fresh. Speaker initialization remains disabled in the parser-test firmware.
+Re-enabling re-arms the current episode: a fresh out-of-range reading chirps once
+immediately, and low repeats start from that chirp. Episode/timer history stays
+in RAM. After reboot with alerts enabled, a fresh out-of-range reading is a first
+occurrence and chirps once. Unit and forecast button preferences are not persisted.
 
-Constants for volume, tone length/frequency, thresholds and low repeat interval
-are in include/alerts.h. The screen behavior and A/B/C buttons are unchanged.
+## Freshness and timing
 
-Verification: Speaker.tone and setVolume signatures and the internal speaker
-configuration were checked against the pinned M5Unified source. Added state
-fixtures for first highs/lows, no high repeats, range re-arming, the exact
-15-minute boundary, reminder reset, fresh/stale behavior, direct band transitions,
-invalid data, unacknowledged tones and millis wrap. These run automatically in
-Flash-Core2.cmd before firmware build/upload. Their new execution and physical
-tone/volume verification remain pending on the user's PC; this session cannot
-launch the compiler. No audible hardware test was performed here.
+Only the latest actual SGV is used. Forecasts, missing/invalid readings and stale
+data do not chirp. Default SGV freshness is ten minutes. A failed fetch does not
+automatically invalidate a still-fresh cached sample; it keeps aging normally.
+A stale period/reconnect does not re-arm an already-announced high. A low reminder
+due while stale waits for fresh low data.
 
-After flashing, check audibility at the chosen volume and verify episode/repeat
-behavior against actual timestamped readings. This supplements the existing
-secondary display; it does not replace the CGM/AAPS alert system.
+Low timers use monotonic milliseconds, independent of NTP/timezone and safe
+across counter wrap. An alert is consumed only when the speaker accepts the tone.
+Failed requests retry at most every 30 seconds while the triggering reading is
+fresh. Parser-test firmware disables the speaker and does not change saved mute.
+
+These chirps supplement the secondary display and do not replace CGM/AAPS alerts.
+Current test/build evidence and remaining sound/touch checks are recorded in
+[VERIFICATION.md](VERIFICATION.md).

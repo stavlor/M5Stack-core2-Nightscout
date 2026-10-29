@@ -1,50 +1,69 @@
-Latest marker/color update: each SMB now uses one solid cyan dot. Repeated SMB uploads are deduplicated by pump type/serial/pumpId when available; without pump identity, only identical millisecond timestamps and doses/carbs are deduplicated. Separate SMBs at different times remain separate, even when crowded label text is suppressed. Glucose history now colors each sample and interpolated segment green in range, orange above range, and red below range; stale history stays gray. This supersedes older outlined-diamond and single-color descriptions. Four new deduplication checks bring the pre-flash suite to 33; their execution and the firmware build remain pending on the user PC.
+# Treatment markers and OpenAPS forecasts
 
-Latest layout: treatment markers are inside the graph above the lower threshold line. Labels below that line use compact C10 (10 g carbs), S0.5 (0.5 U SMB) and B1 (1 U other bolus) notation. Carb and insulin labels occupy separate rows, with collision suppression. Trailing decimal zeros are removed; precision remains up to two decimals. This supersedes older marker-lane/label descriptions below.
+## Treatments
 
-# Treatment and prediction overlays
+| Marker and compact label | Meaning |
+| --- | --- |
+| Orange triangle, C10 | 10 g carbohydrates |
+| One solid cyan dot, S0.5 | 0.5 U explicitly identified as an SMB |
+| Gray dot, B1 | 1 U of another reported bolus |
 
-This update supersedes README statements that C is unused or treatments and
-prediction arrays are excluded.
+Markers sit inside the graph above its lower threshold line; compact labels are
+below it in separate carb/insulin rows. Trailing decimal zeros are removed and
+up to two decimals retained. Overlapping labels are suppressed while individual
+markers remain. Separate SMBs at different times are not combined merely because
+they are close on screen.
 
-Orange C triangles show carbohydrate entries in grams. Cyan S diamonds identify
-SMBs only with explicit isSMB=true or type=SMB; gray B dots show other reported
-boluses. Correction Bolus alone does not establish SMB. Combined carb/insulin
-records appear in both lanes. Insulin labels use two decimal places. Labels that
-would overlap are suppressed, while their timestamp markers remain visible.
-Extended/combo totals are not plotted as instantaneous insulin delivery.
+SMB identification requires boolean `isSMB: true` or `type: "SMB"`. Correction
+Bolus alone is not sufficient. Combined carb/insulin entries appear in both
+lanes. Extended/combo totals are not shown as instantaneous insulin doses.
 
-The third read-only API resource is /api/v1/treatments.json, filtered to the graph
-window with a 200-record limit. The token needs api:treatments:read. Numeric date,
-mills, timestamp and created_at are supported, in that priority order. Invalid,
-deleted, future and out-of-window events are excluded. IDs are deduplicated.
-The newest 128 qualifying events are retained, with a limited-history notice at
-the bounds. Treatment failures retain historical markers and show a Treat error;
-successful empty responses clear them. Treatments may come from any uploader in
-the same Nightscout account.
+The v3 request reads the configured history window, selects necessary fields and
+limits the response to 200 records. The newest 128 qualifying events are retained,
+even for unordered input. A limit notice appears at response/storage bounds.
+Read failure retains prior markers with a Treat error; valid empty results clear
+them. Old markers leave the moving history window.
 
-Button C toggles forecasts, initially on. Fresh glucose and predictions enable
-a one-hour future pane to the right of a vertical now separator. Dashed IOB,
-COB, UAM and ZT glucose predictions use magenta, orange, yellow and cyan.
-Samples are five minutes apart, anchored at the result timestamp. Up to 49
-samples per curve are retained; only the next hour is drawn. Values convert
-with glucose units. The newest usable suggested/enacted run is chosen as a
-whole; curves from different calculations are never merged. Missing curves are
-omitted and malformed samples leave gaps without shifting time. Stale
-predictions disappear, and history returns to full width. Forecasts visualize
-uploaded AAPS calculations and do not establish pump delivery or closed-loop mode.
-A refreshes and B toggles units as before. Settings reset at reboot.
+Timestamp priority is `date`, `mills`, `timestamp`, then `created_at`. Invalid,
+deleted, future and out-of-window records are ignored. V3 public `identifier`
+is preferred; legacy `_id` is supported. IDs are deduplicated. Repeated SMBs also
+use a pump identity scoped by pump type, serial and pumpId when available.
+Without that identity, only identical millisecond timestamp, insulin and carb
+amounts are deduplicated. There is no near-time or pixel grouping.
 
-Verification: the user confirmed the prior firmware works, and its local test
-log shows 16 passed, 0 failed. Added 13 checks for treatment classification,
-validation, timestamps, ID deduplication, filtering and bounds; and prediction
-validation, timestamp selection, staleness, missing arrays and bounds.
-Flash-Core2.cmd automatically runs all 29 checks before building/uploading.
-This session could not launch the compiler, so the new checks and hardware
-build remain pending on the user's PC. No new-revision test pass is claimed.
+Treatments may come from any uploader in the same Nightscout account.
+`AAPS_DEVICE` filters device status/forecasts, not treatments. Treatment read
+permission is required. No treatment writes are performed.
 
-AAPS serializer fields were checked in the downloaded source. OpenAPS prediction
-spacing: https://github.com/openaps/docs/blob/master/docs/docs/Resources/glossary.md
+## Forecasts
 
-After flashing, verify marker times/amounts against Nightscout, dense marker
-labels, C toggle, unit conversion, absent curves and stale suppression.
+Button C toggles forecasts. With fresh glucose and a fresh calculation, a
+one-hour future pane appears right of a vertical now divider, ending at +1h.
+Configured history remains on the left. Missing/stale predictions remove the
+future pane and return history to full width.
+
+| Dashed glucose curve | Color |
+| --- | --- |
+| IOB | Magenta |
+| COB | Orange |
+| UAM | Yellow |
+| ZT, zero-temp | Cyan |
+
+These are uploaded `openaps.suggested/enacted.predBGs` glucose arrays, not future
+insulin amounts or locally computed predictions. Values are mg/dL internally
+and convert with display units. The first sample is at the calculation timestamp;
+subsequent samples are five minutes apart. Up to 49 samples per curve are retained,
+with only the next hour drawn. The newest usable suggested/enacted run is selected
+as a whole, without mixing curves from different calculations.
+
+Missing arrays are omitted. Invalid samples leave gaps without shifting time
+indices. Unsupported aCOB/other variants are not rendered. Forecasts are hidden
+when their calculation or current SGV exceeds the configured stale limit.
+Server modification/upload time does not refresh an old calculation.
+
+The IOB metric uses the current IOB object/first array item or newer suggested
+IOB, not future IOB activity samples. Forecasts read the separate predBGs arrays.
+Neither forecasts nor a suggestion establish pump mode or delivery.
+
+Five-minute spacing is described in the [OpenAPS glossary](https://github.com/openaps/docs/blob/master/docs/docs/Resources/glossary.md).
+See [V3.md](V3.md) for requests and [VERIFICATION.md](VERIFICATION.md) for evidence.
