@@ -12,6 +12,8 @@
 #include "display_settings.h"
 #include "alerts.h"
 #include "power_state.h"
+#include "ns_settings.h"
+#include "ns_api.h"
 #if __has_include("config.h")
 #include "config.h"
 #else
@@ -79,13 +81,74 @@ public:
   int peek() override {return -1;}
   void flush() override {}
 };
-bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char *error, size_t cap) {
+// Network task only: JWTs are kept in RAM and never written to Preferences.
+String jwt;
+int64_t jwtExpiry=0;
+uint32_t authFailedAt=0;
+bool authCooling=false;
+char lastAuthError[48]={};
+String urlEncode(const char *value) {
+  String out;
+  while (*value) {
+    uint8_t c=uint8_t(*value++);
+    if ((c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') || c=='-' || c=='_' || c=='.' || c=='~') out+=char(c);
+    else {char encoded[4];snprintf(encoded,sizeof(encoded),"%%%02X",c);out+=encoded;}
+  }
+  return out;
+}
+void authFailure(const char *message) {
+  jwt="";jwtExpiry=0;authCooling=true;authFailedAt=millis();
+  strlcpy(lastAuthError,message,sizeof(lastAuthError));
+}
+bool ensureJwt(char *error,size_t cap) {
+  int64_t now=time(nullptr);
+  if (!nsapi::renewNeeded(jwt.length()>0,jwtExpiry,now)) return true;
+  if (authCooling && uint32_t(millis()-authFailedAt)<30000) {
+    strlcpy(error,lastAuthError,cap);return false;
+  }
+  auto fail=[&](const char *message){authFailure(message);strlcpy(error,message,cap);return false;};
+  if (now<1767225600) return fail("V3 auth needs valid clock");
+  WiFiClientSecure tls;tls.setCACert(reinterpret_cast<const char*>(rootStart));tls.setHandshakeTimeout(12);
+  HTTPClient http;http.setUserAgent("ESP32HTTPClient");http.setConnectTimeout(10000);http.setTimeout(20000);http.setReuse(false);
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  // This standard NS endpoint necessarily carries the subject token in its
+  // TLS-protected path. Never print the path, credentials or response body.
+  if (!http.begin(tls,String(cfg::NS_URL)+"/api/v2/authorization/request/"+urlEncode(cfg::NS_TOKEN)))
+    return fail("V3 auth setup failed");
+  http.addHeader("Accept","application/json");http.addHeader("Accept-Encoding","identity");
+  int code=http.GET();
+  if (code!=200) {
+    http.end();char message[48];
+    if (code<0) snprintf(message,sizeof(message),"Auth TLS/network %d",code);
+    else snprintf(message,sizeof(message),"Auth HTTP %d",code);
+    return fail(message);
+  }
+  constexpr size_t maxAuth=8192;
+  if (http.getSize()>int(maxAuth)) {http.end();return fail("Auth response too large");}
+  Body body(http.getSize()>=0?size_t(http.getSize()):maxAuth);
+  if (!body.buffer.data) {http.end();return fail("Auth memory unavailable");}
+  int got=http.writeToStream(&body),expected=http.getSize();http.end();
+  if (got<0 || body.buffer.overflow || (expected>=0 && got!=expected)) return fail("Auth response incomplete");
+  DynamicJsonDocument filter(256);filter["token"]=true;filter["exp"]=true;
+  DynamicJsonDocument doc(6144);
+  auto err=deserializeJson(doc,body.buffer.data,body.buffer.length,DeserializationOption::Filter(filter),DeserializationOption::NestingLimit(8));
+  const char *value=nullptr;int64_t expiry=0;
+  if (err || !nsapi::tokenResponse(doc.as<JsonVariantConst>(),time(nullptr),value,expiry))
+    return fail("Auth token/expiry invalid");
+  jwt="";
+  if (!jwt.concat(value)) return fail("Auth token memory unavailable");
+  jwtExpiry=expiry;authCooling=false;lastAuthError[0]=0;
+  return true;
+}
+bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char *error, size_t cap, bool allowRenew=true) {
+  if (nscfg::USE_V3 && !ensureJwt(error,cap)) return false;
   const bool glucose=resource==Resource::Glucose;
   const char *label=glucose?"SGV":resource==Resource::Status?"AAPS":"Treatments";
   WiFiClientSecure tls;
   tls.setCACert(reinterpret_cast<const char*>(rootStart));
   tls.setHandshakeTimeout(12);
   HTTPClient http;
+  http.setUserAgent("ESP32HTTPClient");
   http.setConnectTimeout(10000);
   http.setTimeout(20000);
   http.setReuse(false);
@@ -93,10 +156,15 @@ bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char
   if (!http.begin(tls,String(cfg::NS_URL)+path)) {strlcpy(error,"HTTPS setup failed",cap); return false;}
   http.addHeader("Accept","application/json");
   http.addHeader("Accept-Encoding","identity");
-  // Nightscout accepts an unhashed subject access token in this header.
-  // No token in URL, no API_SECRET, and never log either header or body.
-  http.addHeader("api-secret",cfg::NS_TOKEN);
+  if (nscfg::USE_V3) http.addHeader("Authorization","Bearer "+jwt);
+  else http.addHeader("api-secret",cfg::NS_TOKEN);
   int code=http.GET();
+  if (nscfg::USE_V3 && code==401 && allowRenew) {
+    http.end();jwt="";jwtExpiry=0;
+    if (!ensureJwt(error,cap)) return false;
+    return fetch(path,resource,s,time(nullptr),error,cap,false);
+  }
+  if (nscfg::USE_V3 && code==401) authFailure("V3 access denied after renewal");
   bool ok=false;
   if (code!=200) {
     if (code<0) {
@@ -128,17 +196,19 @@ bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char
     else if (expected>=0 && got!=expected) snprintf(error,cap,"Short body %d/%d",got,expected);
     else {
       // Filter retains supported glucose forecasts and removes unused subtrees.
-      DynamicJsonDocument filter(4096);
-      if (resource==Resource::Treatments) model::treatmentFilter(filter);
-      else model::makeFilter(filter,glucose);
+      DynamicJsonDocument items(4096),filter(6144);
+      if (resource==Resource::Treatments) model::treatmentFilter(items);
+      else model::makeFilter(items,glucose);
+      nsapi::responseFilter(filter,items,nscfg::USE_V3);
       DynamicJsonDocument doc(65536);
       auto err=deserializeJson(doc,body.buffer.data,body.buffer.length,DeserializationOption::Filter(filter),DeserializationOption::NestingLimit(16));
       if (err) strlcpy(error,"Invalid/oversized JSON",cap);
       else {
-        if (resource==Resource::Glucose) ok=model::entries(doc.as<JsonVariantConst>(),now,s.history);
-        else if (resource==Resource::Status) ok=model::statuses(doc.as<JsonVariantConst>(),cfg::AAPS_DEVICE,now,s.status);
-        else ok=model::treatments(doc.as<JsonVariantConst>(),now-int64_t(cfg::GRAPH_HOURS)*3600,now,s.treatments);
-        strlcpy(error,ok?"":"Expected JSON array",cap);
+        JsonVariantConst collection=nsapi::collection(doc.as<JsonVariantConst>(),nscfg::USE_V3);
+        if (resource==Resource::Glucose) ok=model::entries(collection,now,s.history);
+        else if (resource==Resource::Status) ok=model::statuses(collection,cfg::AAPS_DEVICE,now,s.status);
+        else ok=model::treatments(collection,now-int64_t(cfg::GRAPH_HOURS)*3600,now,s.treatments);
+        strlcpy(error,ok?"":nscfg::USE_V3?"Invalid V3 result/status":"Expected JSON array",cap);
       }
     }
   }
@@ -171,27 +241,33 @@ void worker(void*) {
         } else {
           // Keep a monotonic anchor so an NTP outage never freezes data age.
           s.clockAt=now; s.monoAt=monotonicSeconds();
-          char entryPath[160];
           const long long sinceMs=(now-int64_t(cfg::GRAPH_HOURS)*3600)*1000;
-          snprintf(entryPath,sizeof(entryPath),
-            "/api/v1/entries/sgv.json?count=288&find[date][$gte]=%lld",sinceMs);
+          char since[32],until[32];snprintf(since,sizeof(since),"%lld",sinceMs);
+          snprintf(until,sizeof(until),"%lld",(long long)(now+120)*1000);
+          String entryPath=nscfg::USE_V3?
+            String("/api/v3/entries?type$eq=sgv&date$gte=")+since+"&date$lte="+until+
+              "&sort$desc=date&limit=288&fields=date,sgv,direction,isValid,isDeleted":
+            String("/api/v1/entries/sgv.json?count=288&find[date][$gte]=")+since;
           bool a=fetch(entryPath,Resource::Glucose,s,now,s.glucoseError,sizeof(s.glucoseError));
-          // Device statuses contain large prediction arrays. Only the newest
-          // matching snapshot is displayed, so do not download 24 snapshots.
-          String path="/api/v1/devicestatus.json?count=2&find[openaps][$exists]=true";
-          if (*cfg::AAPS_DEVICE) {
-            path+="&find[device]=";
-            const char *p=cfg::AAPS_DEVICE;
-            while (*p) { char b[4]; snprintf(b,sizeof(b),"%%%02X",uint8_t(*p++)); path+=b; }
-          }
+          String path=nscfg::USE_V3?
+            "/api/v3/devicestatus?sort$desc=date&limit=2&fields=date,created_at,device,openaps,pump,isValid,isDeleted":
+            "/api/v1/devicestatus.json?count=2&find[openaps][$exists]=true";
+          if (*cfg::AAPS_DEVICE) path+=String(nscfg::USE_V3?"&device$eq=":"&find[device]=")+urlEncode(cfg::AAPS_DEVICE);
           bool b=fetch(path,Resource::Status,s,time(nullptr),s.statusError,sizeof(s.statusError));
-          time_t windowStart=time(nullptr)-int64_t(cfg::GRAPH_HOURS)*3600;
-          struct tm utc; gmtime_r(&windowStart,&utc);
-          char iso[32]; strftime(iso,sizeof(iso),"%Y-%m-%dT%H:%M:%S.000Z",&utc);
-          char treatmentPath[320];
-          snprintf(treatmentPath,sizeof(treatmentPath),
-            "/api/v1/treatments.json?count=200&find[$or][0][date][$gte]=%lld&find[$or][1][created_at][$gte]=%s",
-            (long long)windowStart*1000,iso);
+          String treatmentPath;
+          if (nscfg::USE_V3) {
+            char current[32];snprintf(current,sizeof(current),"%lld",(long long)time(nullptr)*1000);
+            treatmentPath=String("/api/v3/treatments?date$gte=")+since+"&date$lte="+current+
+              "&sort$desc=date&limit=200&fields=identifier,date,created_at,mills,timestamp,carbs,insulin,isSMB,type,isValid,isDeleted,eventType,pumpId,pumpType,pumpSerial";
+          } else {
+            time_t windowStart=time(nullptr)-int64_t(cfg::GRAPH_HOURS)*3600;
+            struct tm utc;gmtime_r(&windowStart,&utc);
+            char iso[32];strftime(iso,sizeof(iso),"%Y-%m-%dT%H:%M:%S.000Z",&utc);
+            char legacy[320];snprintf(legacy,sizeof(legacy),
+              "/api/v1/treatments.json?count=200&find[$or][0][date][$gte]=%lld&find[$or][1][created_at][$gte]=%s",
+              (long long)windowStart*1000,iso);
+            treatmentPath=legacy;
+          }
           bool c=fetch(treatmentPath,Resource::Treatments,s,time(nullptr),s.treatmentError,sizeof(s.treatmentError));
           good=a&&b&&c;
         }

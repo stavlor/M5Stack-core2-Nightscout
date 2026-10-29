@@ -10,8 +10,8 @@ constexpr size_t MAX_POINTS = 288;
 constexpr int64_t MIN_TIME = 1577836800; // 2020-01-01
 inline void makeFilter(DynamicJsonDocument &filter, bool glucose) {
   JsonObject f=filter.to<JsonArray>().createNestedObject();
-  if (glucose) {f["sgv"]=true;f["date"]=true;f["dateString"]=true;f["direction"]=true;return;}
-  f["created_at"]=true;f["device"]=true;
+  if (glucose) {f["sgv"]=true;f["date"]=true;f["dateString"]=true;f["direction"]=true;f["isValid"]=true;f["isDeleted"]=true;return;}
+  f["created_at"]=true;f["date"]=true;f["device"]=true;f["isValid"]=true;f["isDeleted"]=true;
   for (const char *key : {"suggested","enacted"}) {
     JsonObject a=f["openaps"][key].to<JsonObject>();
     for (const char *k : {"timestamp","IOB","COB","received"}) a[k]=true;
@@ -87,10 +87,15 @@ inline bool metric(JsonVariantConst v, int64_t t, int64_t now, Metric &out, floa
   if (!validTime(t,now) || !number(v,n) || n < lo || n > hi) return false;
   out.value=n; out.t=t; return true;
 }
+inline bool deleted(JsonVariantConst o) {
+  return (o["isValid"].is<bool>() && !o["isValid"].as<bool>()) ||
+    (o["isDeleted"].is<bool>() && o["isDeleted"].as<bool>());
+}
 inline bool entries(JsonVariantConst root, int64_t now, History &out) {
   if (!root.is<JsonArrayConst>()) return false;
   History next;
   for (JsonObjectConst o : root.as<JsonArrayConst>()) {
+    if (deleted(o)) continue;
     float n;
     int64_t t = timestamp(o["date"]);
     if (!t) t = timestamp(o["dateString"]);
@@ -132,10 +137,11 @@ inline bool statuses(JsonVariantConst root, const char *device, int64_t now, Sta
   JsonObjectConst selected;
   int64_t newest=0;
   for (JsonObjectConst o : root.as<JsonArrayConst>()) {
-    if (!o["openaps"].is<JsonObjectConst>()) continue;
+    if (deleted(o) || !o["openaps"].is<JsonObjectConst>()) continue;
     const char *name=o["device"] | "";
     if (*device && strcmp(device,name)) continue;
-    int64_t t=timestamp(o["created_at"]);
+    int64_t t=timestamp(o["date"]);
+    if (!t) t=timestamp(o["created_at"]);
     if (validTime(t,now) && t>newest) { selected=o; newest=t; }
   }
   Status s;

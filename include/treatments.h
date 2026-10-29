@@ -16,7 +16,7 @@ struct Treatments {
 };
 inline void treatmentFilter(DynamicJsonDocument &doc) {
   JsonObject f=doc.to<JsonArray>().createNestedObject();
-  for (const char *k : {"_id","date","mills","created_at","timestamp","carbs","insulin","isSMB","type","isValid","isDeleted","eventType","pumpId","pumpType","pumpSerial"}) f[k]=true;
+  for (const char *k : {"_id","identifier","date","mills","created_at","timestamp","carbs","insulin","isSMB","type","isValid","isDeleted","eventType","pumpId","pumpType","pumpSerial"}) f[k]=true;
 }
 inline int64_t treatmentMilliseconds(JsonVariantConst v,int64_t seconds) {
   if (v.is<int64_t>() || v.is<double>()) {
@@ -74,7 +74,7 @@ inline bool treatments(JsonVariantConst root,int64_t start,int64_t now,Treatment
       !strcmp(o["type"] | "","SMB"));
     if (!e.carbs && !e.insulin) continue;
     if (e.smb) e.pumpKey=treatmentPumpKey(o);
-    const char *id=o["_id"] | "";
+    const char *id=o["identifier"] | (o["_id"] | "");
     if (strlen(id)<sizeof(e.id)) strlcpy(e.id,id,sizeof(e.id));
     bool duplicate=false;
     for (size_t i=0;i<next.count;++i) {

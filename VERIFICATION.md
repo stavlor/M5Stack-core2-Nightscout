@@ -1,3 +1,5 @@
+Latest transport migration: see V3.md. V3 is enabled by default; new transport fixtures/build and device verification are pending. Historical results below refer to earlier revisions.
+
 Latest display update: see DISPLAY.md. Its firmware build/device checks are pending.
 
 Latest revision: see OVERLAYS.md. New overlay tests/build remain pending; the build and test results below describe earlier revisions.

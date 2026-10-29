@@ -4,6 +4,7 @@
 #include "treatments.h"
 #include "alerts.h"
 #include "power_state.h"
+#include "ns_api.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -185,6 +186,59 @@ inline int runParserTests() {
     "Invalid current data cannot assert USB power");
   check(powerstate::classify(0xf0,5.0f,0,5.0f,150)==powerstate::Source::External,
     "Input selection follows measured supply instead of unused USB voltage");
+  {
+    DynamicJsonDocument items(4096),wrapped(6144);
+    model::makeFilter(items,true);nsapi::responseFilter(wrapped,items,true);
+    e=deserializeJson(doc,R"({"status":200,"result":[{"date":1793102400000,"sgv":123,"direction":"Flat","noise":7}]})",DeserializationOption::Filter(wrapped));
+    bool parsed=model::entries(nsapi::collection(doc.as<JsonVariantConst>(),true),now,h);
+    check(!e && parsed && h.count==1 && h.p[0].sgv==123 && doc["result"][0]["noise"].isNull(),
+      "Production v3 response filter and wrapped glucose result");
+    deserializeJson(doc,R"({"status":200,"result":{"sgv":999}})");
+    check(!model::entries(nsapi::collection(doc.as<JsonVariantConst>(),true),now,h) && h.count==1,
+      "Invalid v3 result cannot overwrite a good glucose snapshot");
+    deserializeJson(doc,R"({"status":403,"result":[]})");
+    check(nsapi::collection(doc.as<JsonVariantConst>(),true).isNull(),"Non-success v3 status is rejected");
+    deserializeJson(doc,R"({"status":"200","result":[]})");
+    check(nsapi::collection(doc.as<JsonVariantConst>(),true).isNull(),"V3 status must be numeric");
+    deserializeJson(doc,R"({"status":200,"result":[]})");
+    check(model::entries(nsapi::collection(doc.as<JsonVariantConst>(),true),now,h) && !h.count,
+      "Successful empty v3 collection clears old data");
+    deserializeJson(doc,R"([{"date":1793102400000,"sgv":124}])");
+    check(model::entries(nsapi::collection(doc.as<JsonVariantConst>(),false),now,h) && h.count==1 &&
+      nsapi::collection(doc.as<JsonVariantConst>(),true).isNull(),"Legacy arrays remain explicit v1-only responses");
+    model::makeFilter(items,false);nsapi::responseFilter(wrapped,items,true);
+    e=deserializeJson(doc,R"({"status":200,"result":[{"date":1793102400000,"device":"aaps","openaps":{"suggested":{"timestamp":"2026-10-27T12:00:00Z","IOB":1,"predBGs":{"IOB":[100,110]}}}}]})",DeserializationOption::Filter(wrapped));
+    model::statuses(nsapi::collection(doc.as<JsonVariantConst>(),true),"aaps",now,s);
+    check(!e && s.uploaded==now && s.iob.value==1 && s.forecast.count[0]==2,
+      "V3 canonical device date and predictions survive envelope filtering");
+    model::treatmentFilter(items);nsapi::responseFilter(wrapped,items,true);
+    e=deserializeJson(doc,R"({"status":200,"result":[{"identifier":"public-id","date":1793102340000,"carbs":10},{"identifier":"public-id","date":1793102340000,"carbs":10},{"identifier":"deleted","date":1793102340000,"carbs":10,"isValid":false}]})",DeserializationOption::Filter(wrapped));
+    model::treatments(nsapi::collection(doc.as<JsonVariantConst>(),true),now-10800,now,treatments);
+    check(!e && treatments.count==1 && !strcmp(treatments.events[0].id,"public-id"),
+      "V3 public identifiers deduplicate treatments and tombstones are excluded");
+    deserializeJson(doc,R"([{"date":1793102400000,"sgv":123,"isValid":false},{"date":1793102400000,"sgv":124,"isDeleted":true}])");
+    model::entries(doc.as<JsonVariantConst>(),now,h);
+    check(!h.count,"Deleted glucose documents never become current readings");
+    deserializeJson(doc,R"([{"date":1793102400000,"isValid":false,"openaps":{"suggested":{"timestamp":"2026-10-27T12:00:00Z","IOB":1}}}])");
+    model::statuses(doc.as<JsonVariantConst>(),"",now,s);
+    check(!s.uploaded,"Deleted device status cannot revive loop or pump values");
+  }
+  {
+    const char *token=nullptr;int64_t expires=0;
+    deserializeJson(doc,R"({"token":"aaa.bbb.ccc","exp":1793106000})");
+    check(nsapi::tokenResponse(doc.as<JsonVariantConst>(),now,token,expires) && expires==now+3600,
+      "Authorization response yields bounded JWT and expiration");
+    check(!nsapi::renewNeeded(true,now+61,now) && nsapi::renewNeeded(true,now+60,now) &&
+      nsapi::renewNeeded(false,now+3600,now),"JWT renews before expiry and when missing");
+    deserializeJson(doc,R"({"token":"aaa.bbb.ccc","exp":1793102400})");
+    check(!nsapi::tokenResponse(doc.as<JsonVariantConst>(),now,token,expires),"Expired JWT is not accepted");
+    deserializeJson(doc,R"({"token":"aaa.bbb.ccc"})");
+    check(!nsapi::tokenResponse(doc.as<JsonVariantConst>(),now,token,expires),"JWT without expiration fails closed");
+    deserializeJson(doc,R"({"token":"aaa.bbb.ccc\r\nInjected","exp":1793106000})");
+    check(!nsapi::tokenResponse(doc.as<JsonVariantConst>(),now,token,expires),"JWT header-injection characters are rejected");
+    deserializeJson(doc,R"({"token":"aaa..ccc","exp":1793106000})");
+    check(!nsapi::tokenResponse(doc.as<JsonVariantConst>(),now,token,expires),"Empty JWT segments are rejected");
+  }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;
 }

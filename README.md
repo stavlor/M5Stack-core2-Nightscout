@@ -1,3 +1,5 @@
+V3 is now the default Nightscout transport. See V3.md for JWT handling, queries, compatibility, verification and the explicit legacy fallback. This supersedes older v1-only setup descriptions below.
+
 See ALERTS.md for enabled first-occurrence glucose chirps and 15-minute low reminders. This supersedes older statements that sound is disabled.
 
 See DISPLAY.md for change-driven redraws and the upper-right local clock.
