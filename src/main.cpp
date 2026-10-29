@@ -296,7 +296,7 @@ void drawPowerIndicator(bool force=false) {
   }
   if (!force && level==shownLevel && source==shownSource && int(charging)==shownCharging) return;
   shownLevel=level;shownSource=source;shownCharging=charging;
-  M5.Display.fillRect(200,0,64,12,TFT_BLACK);
+  M5.Display.fillRect(200,0,48,12,TFT_BLACK);
   uint16_t color=source?TFT_GREEN:level<0?TFT_LIGHTGREY:level<=20?TFT_RED:TFT_WHITE;
   M5.Display.drawRect(201,2,14,8,color);
   M5.Display.fillRect(215,4,2,4,color);
@@ -308,6 +308,31 @@ void drawPowerIndicator(bool force=false) {
   if (source && charging) text+="+";
   M5.Display.setTextSize(1);M5.Display.setTextColor(color,TFT_BLACK);
   M5.Display.setCursor(221,2);M5.Display.print(text);
+}
+void drawWifiIndicator(bool force=false) {
+  static bool sampled=false,connected=false;
+  static uint32_t sampledAt=0;
+  static int bars=0,shownBars=-1,shownConnected=-1;
+  uint32_t tick=millis();
+  if (!sampled || tick-sampledAt>=1000) {
+    sampled=true;sampledAt=tick;
+    connected=WiFi.status()==WL_CONNECTED;
+    int rssi=connected?WiFi.RSSI():0;
+    bars=!connected || rssi>=0?0:rssi>=-55?4:rssi>=-67?3:rssi>=-75?2:1;
+  }
+  if (!force && bars==shownBars && int(connected)==shownConnected) return;
+  shownBars=bars;shownConnected=connected;
+  M5.Display.fillRect(248,0,16,12,TFT_BLACK);
+  if (!connected) {
+    M5.Display.drawLine(250,3,260,10,TFT_RED);
+    M5.Display.drawLine(250,10,260,3,TFT_RED);
+    return;
+  }
+  uint16_t color=bars>=3?TFT_GREEN:bars==2?TFT_YELLOW:TFT_ORANGE;
+  for (int i=0;i<4;++i) {
+    int height=(i+1)*2;
+    M5.Display.fillRect(249+i*3,10-height,2,height,i<bars?color:TFT_DARKGREY);
+  }
 }
 void drawLiveFields(int64_t now,bool force=false) {
   static char previousClock[9]={};
@@ -462,6 +487,7 @@ void draw() {
   line(layout::FOOTER_Y,err,TFT_ORANGE);
   drawLiveFields(now,true);
   drawPowerIndicator(true);
+  drawWifiIndicator(true);
   renderedPayload=payloadFingerprint();renderedTimed=timedFingerprint(now);rendered=true;
 }
 void setup() {
@@ -494,5 +520,6 @@ void loop() {
   else if (newSecond) drawLiveFields(now);
   lastCheckedSecond=now;
   drawPowerIndicator();
+  drawWifiIndicator();
   delay(10);
 }
