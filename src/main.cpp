@@ -5,6 +5,7 @@
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
 #include <Preferences.h>
+#include <atomic>
 #include "body_buffer.h"
 #include "model.h"
 #include "treatments.h"
@@ -38,6 +39,9 @@ bool showForecast=true;
 alerts::State glucoseAlerts;
 Preferences alertPreferences;
 bool alertPreferencesReady=false;
+std::atomic<bool> networkBusy{false};
+uint32_t lastAppliedAt=0;
+bool haveApplied=false;
 enum class Resource {Glucose,Status,Treatments};
 namespace layout {
 constexpr int PLOT_TOP=72, PLOT_BOTTOM=160;
@@ -146,6 +150,7 @@ void worker(void*) {
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.persistent(false);
   configTzTime(displaycfg::TIMEZONE,cfg::NTP1,cfg::NTP2);
   for (;;) {
+    networkBusy.store(true);
     bool good=false;
     if (!configured()) {
       strlcpy(s.glucoseError,"Edit include/config.h",sizeof(s.glucoseError));
@@ -192,6 +197,7 @@ void worker(void*) {
         }
       }
     }
+    networkBusy.store(false);
     xQueueOverwrite(updates,&s);
     failures=good?0:std::min(failures+1,4u);
     unsigned wait=good?cfg::POLL_SECONDS:std::min(15u*(1u<<failures),300u);
@@ -278,6 +284,28 @@ uint64_t timedFingerprint(int64_t now) {
 }
 uint64_t renderedPayload=0,renderedTimed=0;
 bool rendered=false;
+void drawActivityIndicator(bool force=false) {
+  static int previousMode=-1,previousFrame=-1;
+  uint32_t tick=millis();
+  bool failed=*ui.glucoseError || *ui.statusError || *ui.treatmentError;
+  int mode=networkBusy.load()?1:haveApplied && uint32_t(tick-lastAppliedAt)<500?(failed?3:2):0;
+  int frame=mode==1?(tick/150)%4:0;
+  if (!force && mode==previousMode && frame==previousFrame) return;
+  previousMode=mode;previousFrame=frame;
+  M5.Display.fillRect(278,229,42,11,TFT_BLACK);
+  if (!mode) {M5.Display.fillCircle(311,235,1,TFT_DARKGREY);return;}
+  uint16_t color=mode==1?TFT_CYAN:mode==2?TFT_GREEN:TFT_ORANGE;
+  M5.Display.setTextSize(1);M5.Display.setTextColor(color,TFT_BLACK);
+  M5.Display.setCursor(282,layout::FOOTER_Y);M5.Display.print(mode==1?"GET":mode==2?"UPD":"ERR");
+  if (mode==1) {
+    const int dx[]={0,3,0,-3},dy[]={-3,0,3,0};
+    for (int i=0;i<4;++i) M5.Display.drawLine(311,235,311+dx[i],235+dy[i],i==frame?color:TFT_DARKGREY);
+  } else if (mode==2) {
+    M5.Display.drawLine(308,235,310,237,color);M5.Display.drawLine(310,237,315,232,color);
+  } else {
+    M5.Display.drawLine(308,232,315,238,color);M5.Display.drawLine(308,238,315,232,color);
+  }
+}
 void drawSpeakerIndicator(bool force=false) {
   static int previous=-1;
   bool enabled=glucoseAlerts.isEnabled();
@@ -512,11 +540,17 @@ void draw() {
   M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
   M5.Display.setCursor(315-M5.Display.textWidth(modeText),layout::BASAL_Y);M5.Display.print(modeText);
   String err=*ui.glucoseError?String("SGV: ")+ui.glucoseError:*ui.statusError?String("AAPS: ")+ui.statusError:*ui.treatmentError?String("Treat: ")+ui.treatmentError:ui.treatments.limited?"Treatments limited; reduce graph hours":"A refresh  B units  C forecasts";
+  M5.Display.setTextSize(1);
+  if (M5.Display.textWidth(err)>267) {
+    while (err.length() && M5.Display.textWidth(err+"...")>267) err.remove(err.length()-1);
+    err+="...";
+  }
   line(layout::FOOTER_Y,err,TFT_ORANGE);
   drawLiveFields(now,true);
   drawSpeakerIndicator(true);
   drawPowerIndicator(true);
   drawWifiIndicator(true);
+  drawActivityIndicator(true);
   renderedPayload=payloadFingerprint();renderedTimed=timedFingerprint(now);rendered=true;
 }
 void updateGlucoseAlerts(int64_t now) {
@@ -582,6 +616,7 @@ void loop() {
   if (unitsPressed) mmol=!mmol;
   if (forecastPressed) showForecast=!showForecast;
   bool received=xQueueReceive(updates,&ui,0)==pdTRUE;
+  if (received) {lastAppliedAt=millis();haveApplied=true;}
   bool dataChanged=received && payloadFingerprint()!=renderedPayload;
   static int64_t lastCheckedSecond=-1;
   int64_t now=displayNow();
@@ -593,5 +628,6 @@ void loop() {
   lastCheckedSecond=now;
   drawPowerIndicator();
   drawWifiIndicator();
+  drawActivityIndicator();
   delay(10);
 }
