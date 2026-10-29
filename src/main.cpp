@@ -8,6 +8,7 @@
 #include "model.h"
 #include "treatments.h"
 #include "display_settings.h"
+#include "alerts.h"
 #if __has_include("config.h")
 #include "config.h"
 #else
@@ -490,10 +491,35 @@ void draw() {
   drawWifiIndicator(true);
   renderedPayload=payloadFingerprint();renderedTimed=timedFingerprint(now);rendered=true;
 }
+void updateGlucoseAlerts(int64_t now) {
+  static alerts::State state;
+  static bool retrying=false;
+  static alerts::Event retryEvent=alerts::Event::None;
+  static uint32_t lastAttempt=0;
+  uint32_t tick=millis();
+  bool have=ui.history.count>0;
+  model::Point latest=have?ui.history.p[ui.history.count-1]:model::Point{};
+  alerts::Event event=state.poll(latest.sgv,
+    have && model::fresh(latest.t,now,cfg::SGV_STALE_SECONDS),tick);
+  if (event==alerts::Event::None) {retrying=false;return;}
+  if (retrying && retryEvent==event && uint32_t(tick-lastAttempt)<30000) return;
+  lastAttempt=tick;retryEvent=event;
+  if (M5.Speaker.tone(alerts::CHIRP_HZ,alerts::CHIRP_MS)) {
+    state.played(event,tick);retrying=false;
+  } else {
+    retrying=true;Serial.println("Glucose chirp could not be queued; will retry while fresh.");
+  }
+}
 void setup() {
-  auto c=M5.config(); c.internal_imu=false; c.internal_mic=false; c.internal_spk=false;
+  auto c=M5.config(); c.internal_imu=false; c.internal_mic=false;
+#ifdef RUN_PARSER_TESTS
+  c.internal_spk=false;
+#else
+  c.internal_spk=true;
+#endif
   M5.begin(c); M5.Display.setRotation(1); M5.Display.setBrightness(cfg::BRIGHTNESS);
   Serial.begin(115200);
+  M5.Speaker.setVolume(alerts::VOLUME);
 #ifdef RUN_PARSER_TESTS
   runParserTests();
   for (;;) delay(1000);
@@ -515,6 +541,7 @@ void loop() {
   static int64_t lastCheckedSecond=-1;
   int64_t now=displayNow();
   bool newSecond=now!=lastCheckedSecond;
+  if (received || newSecond) updateGlucoseAlerts(now);
   bool timedChanged=(newSecond || received) && timedFingerprint(now)!=renderedTimed;
   if (!rendered || dataChanged || timedChanged || unitsPressed || forecastPressed) draw();
   else if (newSecond) drawLiveFields(now);

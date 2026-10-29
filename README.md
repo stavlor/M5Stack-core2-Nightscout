@@ -1,3 +1,5 @@
+See ALERTS.md for enabled first-occurrence glucose chirps and 15-minute low reminders. This supersedes older statements that sound is disabled.
+
 See DISPLAY.md for change-driven redraws and the upper-right local clock.
 
 See OVERLAYS.md for the latest SMB/carb markers, prediction pane, button C controls and verification status. That update supersedes older descriptions below.

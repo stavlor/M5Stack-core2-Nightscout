@@ -2,6 +2,7 @@
 #include "model.h"
 #include "body_buffer.h"
 #include "treatments.h"
+#include "alerts.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -106,6 +107,53 @@ inline int runParserTests() {
   deserializeJson(doc,R"([{"date":1793102340123,"insulin":0.5,"isSMB":true,"pumpId":42,"pumpType":"Pump","pumpSerial":"A"},{"date":1793102340123,"insulin":0.5,"isSMB":true,"pumpId":42,"pumpType":"Pump","pumpSerial":"B"}])");
   model::treatments(doc.as<JsonVariantConst>(),now-10800,now,treatments);
   check(treatments.count==2,"SMB pump identifiers are scoped to pump type and serial");
+  {
+    alerts::State a;
+    check(a.poll(200,true,0)==alerts::Event::High,"First fresh high reading requests one chirp");
+    a.played(alerts::Event::High,0);
+    check(a.poll(250,true,1800000)==alerts::Event::None,"Continuing highs do not repeat even when glucose changes");
+    a.poll(180,true,1800100);
+    check(a.poll(181,true,1800200)==alerts::Event::High,"Returning to range re-arms the next high episode");
+  }
+  {
+    alerts::State a;
+    check(a.poll(69,true,100)==alerts::Event::Low,"First fresh low reading requests one chirp");
+    a.played(alerts::Event::Low,100);
+    check(a.poll(60,true,100+alerts::LOW_REPEAT_MS-1)==alerts::Event::None &&
+      a.poll(65,true,100+alerts::LOW_REPEAT_MS)==alerts::Event::Low,
+      "Low reminder fires at 15 minutes, not before");
+    a.played(alerts::Event::Low,100+alerts::LOW_REPEAT_MS);
+    check(a.poll(60,true,100+alerts::LOW_REPEAT_MS+1)==alerts::Event::None,
+      "Successful low reminder restarts its 15-minute interval");
+    a.poll(70,true,100+alerts::LOW_REPEAT_MS+2);
+    check(a.poll(69,true,100+alerts::LOW_REPEAT_MS+3)==alerts::Event::Low,
+      "A new low after an in-range reading chirps immediately");
+  }
+  {
+    alerts::State a;a.poll(200,true,0);a.played(alerts::Event::High,0);
+    check(a.poll(100,false,1000)==alerts::Event::None && a.poll(200,true,2000)==alerts::Event::None,
+      "Stale data and reconnects do not re-arm an ongoing high");
+    check(a.poll(60,true,3000)==alerts::Event::Low,"A direct high-to-low transition chirps for the low");
+    a.played(alerts::Event::Low,3000);
+    check(a.poll(60,false,3000+alerts::LOW_REPEAT_MS)==alerts::Event::None &&
+      a.poll(60,true,3001+alerts::LOW_REPEAT_MS)==alerts::Event::Low,
+      "Stale low reminders are silent and resume only with fresh low data");
+  }
+  {
+    alerts::State a;
+    check(a.poll(70,true,0)==alerts::Event::None && a.poll(180,true,1)==alerts::Event::None &&
+      a.poll(NAN,true,2)==alerts::Event::None && a.poll(9,true,3)==alerts::Event::None,
+      "70 and 180 are in range; missing and invalid glucose never chirp");
+    check(a.poll(60,true,4)==alerts::Event::Low && a.poll(60,true,5)==alerts::Event::Low,
+      "A failed or unacknowledged tone does not consume the first alert");
+  }
+  {
+    alerts::State a;uint32_t start=0xfffffff0u;
+    a.poll(60,true,start);a.played(alerts::Event::Low,start);
+    check(a.poll(60,true,uint32_t(start+1000u))==alerts::Event::None &&
+      a.poll(60,true,uint32_t(start+alerts::LOW_REPEAT_MS))==alerts::Event::Low,
+      "Low repeat timing survives the millis counter wrap");
+  }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;
 }
