@@ -220,15 +220,37 @@ void line(int y,const String &s,uint16_t color=TFT_WHITE,int size=1) {
   M5.Display.setTextColor(color,TFT_BLACK); M5.Display.setTextSize(size);
   M5.Display.setCursor(5,y); M5.Display.print(s);
 }
-String trend(const char *d) {
-  if (!strcmp(d,"DoubleUp")) return "^^";
-  if (!strcmp(d,"SingleUp")) return "^";
-  if (!strcmp(d,"FortyFiveUp")) return "/^";
-  if (!strcmp(d,"Flat")) return "->";
-  if (!strcmp(d,"FortyFiveDown")) return "v\\";
-  if (!strcmp(d,"SingleDown")) return "v";
-  if (!strcmp(d,"DoubleDown")) return "vv";
-  return "?";
+// Native filled graphic arrows avoid font-dependent diagonal glyphs.
+void drawOneTrendArrow(float cx,float cy,float dx,float dy,uint16_t color,float headHalf=6) {
+  const float length=11,headLength=8,shaftHalf=1.5f;
+  float nx=-dy,ny=dx;
+  float tx=cx+dx*length,ty=cy+dy*length;
+  float bx=tx-dx*headLength,by=ty-dy*headLength;
+  float sx=cx-dx*length,sy=cy-dy*length;
+  auto pixel=[](float v){return int(std::lround(v));};
+  int ax=pixel(sx+nx*shaftHalf),ay=pixel(sy+ny*shaftHalf);
+  int az=pixel(sx-nx*shaftHalf),aw=pixel(sy-ny*shaftHalf);
+  int ex=pixel(bx+nx*shaftHalf),ey=pixel(by+ny*shaftHalf);
+  int ez=pixel(bx-nx*shaftHalf),ew=pixel(by-ny*shaftHalf);
+  M5.Display.fillTriangle(ax,ay,az,aw,ex,ey,color);
+  M5.Display.fillTriangle(az,aw,ex,ey,ez,ew,color);
+  M5.Display.fillTriangle(pixel(tx),pixel(ty),pixel(bx+nx*headHalf),pixel(by+ny*headHalf),
+    pixel(bx-nx*headHalf),pixel(by-ny*headHalf),color);
+}
+void drawTrendArrow(const char *direction,int cx,int cy,uint16_t color) {
+  if (!strcmp(direction,"DoubleUp") || !strcmp(direction,"DoubleDown")) {
+    float dy=!strcmp(direction,"DoubleUp")?-1.0f:1.0f;
+    drawOneTrendArrow(cx-6,cy,0,dy,color,4.5f);
+    drawOneTrendArrow(cx+6,cy,0,dy,color,4.5f);
+  } else if (!strcmp(direction,"SingleUp")) drawOneTrendArrow(cx,cy,0,-1,color);
+  else if (!strcmp(direction,"FortyFiveUp")) drawOneTrendArrow(cx,cy,0.7071068f,-0.7071068f,color);
+  else if (!strcmp(direction,"Flat")) drawOneTrendArrow(cx,cy,1,0,color);
+  else if (!strcmp(direction,"FortyFiveDown")) drawOneTrendArrow(cx,cy,0.7071068f,0.7071068f,color);
+  else if (!strcmp(direction,"SingleDown")) drawOneTrendArrow(cx,cy,0,1,color);
+  else {
+    M5.Display.setTextSize(2);M5.Display.setTextColor(color,TFT_BLACK);
+    M5.Display.setCursor(cx-6,cy-8);M5.Display.print("?");
+  }
 }
 // Compare rendered content, not struct padding or the poll's clock anchors.
 // Normalize missing float values so repeated NaNs do not trigger redraws.
@@ -439,7 +461,10 @@ void draw() {
   bool fresh=have && model::fresh(last.t,now,cfg::SGV_STALE_SECONDS);
   uint16_t col=glucoseColor(last.sgv,fresh);
   line(2,"NIGHTSCOUT   "+String(mmol?"mmol/L":"mg/dL")+"   "+(fresh?"":"STALE"),fresh?TFT_CYAN:TFT_ORANGE);
-  line(18,(have?amount(mmol?last.sgv/18.0182f:last.sgv,mmol?1:0):"--")+" "+(have?trend(last.direction):"?"),col,4);
+  String glucoseText=have?amount(mmol?last.sgv/18.0182f:last.sgv,mmol?1:0):"--";
+  line(18,glucoseText,col,4);
+  int arrowCenter=5+M5.Display.textWidth(glucoseText)+26;
+  drawTrendArrow(have?last.direction:"NONE",arrowCenter,33,col);
   // History, treatment lanes and a separately marked future interval.
   const auto &pred=ui.status.forecast;
   bool predicted=showForecast && fresh && model::fresh(pred.t,now,cfg::AAPS_STALE_SECONDS);
