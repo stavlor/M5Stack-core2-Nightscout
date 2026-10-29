@@ -10,6 +10,7 @@
 #include "treatments.h"
 #include "display_settings.h"
 #include "alerts.h"
+#include "power_state.h"
 #if __has_include("config.h")
 #include "config.h"
 #else
@@ -299,34 +300,40 @@ void drawPowerIndicator(bool force=false) {
   static int level=-1,source=0;
   static int shownLevel=-999,shownSource=-999,shownCharging=-1;
   uint32_t tick=millis();
-  if (!sampled || tick-sampledAt>=5000) {
+  if (!sampled || tick-sampledAt>=1000) {
     sampled=true;sampledAt=tick;
-    bool battery=true,usb=false,external=false;
+    bool battery=true,usb=false,external=false,known=true;
     if (M5.Power.getType()==m5::Power_Class::pmic_axp192) {
-      // Core2 v1.3: use input-presence flags, not charging state, so
-      // externally powered + fully charged is still correctly identified.
-      usb=M5.Power.Axp192.isVBUS();external=M5.Power.Axp192.isACIN();
-      battery=M5.Power.Axp192.getBatState();charging=M5.Power.Axp192.isCharging();
+      uint8_t status[2]={};
+      known=M5.Power.Axp192.readRegister(0x00,status,sizeof(status));
+      if (known) {
+        auto input=powerstate::classify(status[0],
+          M5.Power.Axp192.getVBUSVoltage(),M5.Power.Axp192.getVBUSCurrent(),
+          M5.Power.Axp192.getACINVoltage(),M5.Power.Axp192.getACINCurrent());
+        usb=input==powerstate::Source::USB;external=input==powerstate::Source::External;
+        battery=status[1]&0x20;
+        charging=(usb || external) && (status[1]&0x40);
+      } else {battery=false;charging=false;}
     } else {
-      usb=M5.Power.getVBUSVoltage()>=4000;
-      charging=M5.Power.isCharging()==m5::Power_Class::is_charging;
+      int mv=M5.Power.getVBUSVoltage();known=mv>=0;usb=mv>=4000;
+      charging=usb && M5.Power.isCharging()==m5::Power_Class::is_charging;
     }
     level=battery?M5.Power.getBatteryLevel():-1;
     if (level<0) level=-1;else level=std::min(level,100);
-    source=usb?1:external?2:0;
+    source=known?(usb?1:external?2:0):-1;
   }
   if (!force && level==shownLevel && source==shownSource && int(charging)==shownCharging) return;
   shownLevel=level;shownSource=source;shownCharging=charging;
   M5.Display.fillRect(200,0,48,12,TFT_BLACK);
-  uint16_t color=source?TFT_GREEN:level<0?TFT_LIGHTGREY:level<=20?TFT_RED:TFT_WHITE;
+  uint16_t color=source>0?TFT_GREEN:source<0?TFT_LIGHTGREY:level<0?TFT_LIGHTGREY:level<=20?TFT_RED:TFT_WHITE;
   M5.Display.drawRect(201,2,14,8,color);
   M5.Display.fillRect(215,4,2,4,color);
   if (level>=0) {
     int fill=level?std::max(1,(level*10+50)/100):0;
     if (fill) M5.Display.fillRect(203,4,fill,4,color);
   } else M5.Display.drawFastHLine(205,6,5,color);
-  String text=source==1?"USB":source==2?"EXT":level>=0?String(level)+"%":"--%";
-  if (source && charging) text+="+";
+  String text=source<0?"?":source==1?"USB":source==2?"EXT":level>=0?String(level)+"%":"--%";
+  if (source>0 && charging) text+="+";
   M5.Display.setTextSize(1);M5.Display.setTextColor(color,TFT_BLACK);
   M5.Display.setCursor(221,2);M5.Display.print(text);
 }

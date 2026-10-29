@@ -3,6 +3,7 @@
 #include "body_buffer.h"
 #include "treatments.h"
 #include "alerts.h"
+#include "power_state.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -170,6 +171,20 @@ inline int runParserTests() {
     check(silent && initialLow && a.poll(60,true,900002)==alerts::Event::None,
       "Mute blocks low reminders; re-enable starts a fresh low reminder interval");
   }
+  check(powerstate::classify(0x20,5.0f,150,0,0)==powerstate::Source::Battery,
+    "VBUS-present alone does not prove incoming USB power");
+  check(powerstate::classify(0x30,5.0f,150,0,0)==powerstate::Source::USB,
+    "Usable USB supplying current is shown even without a charging flag");
+  check(powerstate::classify(0x30,0,0,0,0)==powerstate::Source::Battery,
+    "Unplugged USB ADC values override lingering input flags");
+  check(powerstate::classify(0x30,5.0f,0,0,0)==powerstate::Source::Battery,
+    "Backfed USB voltage with no incoming current is not USB power");
+  check(powerstate::classify(0xc0,0,0,5.0f,150)==powerstate::Source::External,
+    "Usable separate ACIN input is classified as external power");
+  check(powerstate::classify(0x30,5.0f,NAN,0,0)==powerstate::Source::Battery,
+    "Invalid current data cannot assert USB power");
+  check(powerstate::classify(0xf0,5.0f,0,5.0f,150)==powerstate::Source::External,
+    "Input selection follows measured supply instead of unused USB voltage");
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;
 }
