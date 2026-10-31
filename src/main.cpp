@@ -595,6 +595,9 @@ void draw() {
     for (size_t k=0;k<model::PRED_LINES;++k) label(30+k*45,layout::FORECAST_LEGEND_Y,keys[k],pred.count[k]?colors[k]:TFT_DARKGREY);
     label(225,layout::FORECAST_LEGEND_Y,forecastClipped?"FCAST CLIPPED":"FORECAST",forecastClipped?TFT_ORANGE:TFT_LIGHTGREY);
   } else label(30,layout::FORECAST_LEGEND_Y,showForecast?"Forecast unavailable/stale":"Forecast off (button C)",TFT_DARKGREY);
+  // Frame the upper legend rows without touching their glyphs or the plot.
+  M5.Display.drawFastHLine(18,49,297,0x4208);
+  M5.Display.drawFastHLine(18,70,297,0x4208);
   auto axisLabel=[&](int y,float mgdl) {
     String text=amount(mmol?mgdl/18.0182f:mgdl,mmol?1:0);
     label(std::max(0,27-M5.Display.textWidth(text)),y,text,TFT_LIGHTGREY);
@@ -687,6 +690,9 @@ void draw() {
   label(30,layout::TIME_Y,"-"+String(cfg::GRAPH_HOURS)+"h",TFT_LIGHTGREY);
   label(std::max(62,xx(now)-12),layout::TIME_Y,"now",TFT_LIGHTGREY);
   if (predicted) label(278,layout::TIME_Y,"+1h",TFT_LIGHTGREY);
+  // Treatment and time labels occupy y154..191, between these dividers.
+  M5.Display.drawFastHLine(30,153,285,0x4208);
+  M5.Display.drawFastHLine(30,192,285,0x4208);
   auto &s=ui.status;
   auto value=[&](const model::Metric &m,unsigned d){ return model::fresh(m.t,now,cfg::AAPS_STALE_SECONDS)?amount(m.value,d):String("--");};
   // Fixed columns and right-aligned numbers keep changing values stable.

@@ -132,3 +132,7 @@ pane. The classification uses mg/dL even when labels display mmol/L. Forecasts d
 are clipped and the legend shows FCAST CLIPPED. Treatment markers and their label
 rows stay anchored at the graph bottom as the scale changes. Alert thresholds
 and glucose trace colors retain their existing settings.
+
+Thin muted-gray dividers frame the two upper legend rows (y49 and y70) and
+the lower treatment/time label block (y153 and y192). They occupy the existing
+spacing; graph bounds, text positions and metric rows are unchanged.

@@ -133,3 +133,8 @@ below 70 red, 70..180 green, above 180..249 orange, above 249 red. Drawing
 uses the inverse of the current scale so bands remain clipped without gaps.
 This drawing-only refinement adds no tests; verify contrast and boundary colors
 on the device. It does not change alerts or trace-color thresholds.
+
+Label-block divider positions were checked against existing text bounds:
+upper legend text y52..69 is between lines y49/70; lower label/time text
+y154..191 is between lines y153/192, before the metric row at y194.
+These drawing-only additions still require an on-device visual check.
