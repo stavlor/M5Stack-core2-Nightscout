@@ -125,9 +125,10 @@ a minimum 60 mg/dL span, rounded outward to 10 mg/dL increments and a nonnegativ
 lower bound. There is no fixed 40/250 baseline. Empty history uses 70..180.
 All calculations use mg/dL; axis labels convert to mmol/L when selected.
 
-A dark green background marks only the visible intersection with 70..180 mg/dL.
-An entirely high/low window has no green band. The band extends through the
-forecast pane. Forecasts do not expand the SGV-derived scale; off-scale curves
+Subtle background bands follow the visible scale: dark red below 70 mg/dL,
+dark green from 70 through 180, dark orange above 180 through 249, and dark red
+above 249. Bands are clipped to the visible scale and extend through the forecast
+pane. The classification uses mg/dL even when labels display mmol/L. Forecasts do not expand the SGV-derived scale; off-scale curves
 are clipped and the legend shows FCAST CLIPPED. Treatment markers and their label
 rows stay anchored at the graph bottom as the scale changes. Alert thresholds
 and glucose trace colors retain their existing settings.

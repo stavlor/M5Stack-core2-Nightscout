@@ -127,3 +127,9 @@ contains 96 checks; the last observed passing log covers the preceding 88.
 The new scale tests and firmware still need execution via Flash-Core2.cmd.
 Check physical graph appearance with in-range, high, low and forecast-clipping
 cases after upload. The target band is drawn before traces and treatment labels.
+
+The graph background now shades all visible rows using fixed display bands:
+below 70 red, 70..180 green, above 180..249 orange, above 249 red. Drawing
+uses the inverse of the current scale so bands remain clipped without gaps.
+This drawing-only refinement adds no tests; verify contrast and boundary colors
+on the device. It does not change alerts or trace-color thresholds.

@@ -574,10 +574,12 @@ void draw() {
     if(t>=now-300 && t<=end+300 && std::isfinite(v) && (v<low || v>high)) forecastClipped=true;
   }
   auto yy=[&](float v){return layout::PLOT_BOTTOM-int((v-low)/(high-low)*(layout::PLOT_BOTTOM-layout::PLOT_TOP));};
-  float targetLow,targetHigh;
-  if (graphscale::targetBand(scale,targetLow,targetHigh)) {
-    int top=yy(targetHigh),bottom=yy(targetLow);
-    M5.Display.fillRect(30,top,285,bottom-top+1,0x0120);
+  // Shade each plot row by its represented glucose value. This keeps bands
+  // clipped to the dynamic scale with no gaps/overlapping boundary pixels.
+  for (int y=layout::PLOT_TOP;y<=layout::PLOT_BOTTOM;++y) {
+    float value=low+(high-low)*float(layout::PLOT_BOTTOM-y)/(layout::PLOT_BOTTOM-layout::PLOT_TOP);
+    uint16_t background=value<70?0x2000:value<=180?0x0120:value<=249?0x20A0:0x2000;
+    M5.Display.drawFastHLine(30,y,285,background);
   }
   M5.Display.setTextSize(1);
   auto label=[&](int x,int y,const String &text,uint16_t color) {
