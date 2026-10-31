@@ -20,14 +20,13 @@ probe. The bundled CA and hostname checks succeeded. A generic Python user-agent
 first received 403; repeating with ESP32HTTPClient succeeded, and firmware now
 explicitly uses that user-agent on auth and data requests.
 
-The observed host log now contains 79 passed, zero failed, covering the SMB
-layout additions. The current suite has 88 checks: nine additional checks cover
-stale episode acknowledgement, independent sources, recovery, mute and the
-strict ten-minute boundary. The readability/stale-sound changes still require
-compilation and device validation. The compiler launch was attempted again and
-failed with Windows Illegal System DLL Relocation in this session. Use the local
-Flash-Core2.cmd to run all 88 checks before building/uploading. Earlier binary
-evidence above predates these changes.
+The latest saved work/last-parser-tests.log contains 88 passed, zero failed,
+including SMB layout and stale-alert state checks. This is observed workstation
+evidence, not a new compiler run in this session. The current font and additional
+drawing changes still need building and physical-screen review. Compiler launch
+in this session previously failed with Windows Illegal System DLL Relocation;
+use Flash-Core2.cmd to run checks before building/uploading. Earlier binary
+figures above are historical and do not validate the latest drawing source.
 
 ## Pinned build components
 
@@ -103,3 +102,19 @@ unplug/reconnect and Wi-Fi icons; confirm activity and identical-poll redraw beh
 Verify stale suppression after network loss, recovery, token renewal/revocation,
 CA/hostname failures and bounded memory behavior during a sustained powered run.
 Do not infer that these passed from a successful host suite or a generated binary.
+
+## Font layout source checks
+
+FreeSansBold18pt7b is included by the installed M5GFX; its digit glyphs are
+25 pixels high with 19-pixel advances. The glucose baseline y43 places digits
+at y19..43 inside the existing header area. Native Font2 is used for the metric
+row at y194; fonts and text alignment reset before other drawing. Source checks
+confirm both fonts and the baseline/right-alignment APIs exist in the pinned
+library. Actual font appearance and long-value legibility need device review;
+no new host tests were added for this drawing-only change.
+
+The additional display review covered fixed header/icon bounds, compact age
+widths, age-color refresh triggers, legend shape correspondence, mmol/L axis
+precision, newest-point emphasis, empty-history text and footer/value contrast.
+These drawing changes were inspected in source and still need physical-screen
+review. No additional host tests were added for these low-impact drawing edits.

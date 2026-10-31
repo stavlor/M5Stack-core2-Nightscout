@@ -14,7 +14,11 @@ Current behavior, 2026-10-31.
 - IOB/COB, then reported basal and right-aligned `Mode`. Long mode text is shortened.
 - Footer A/B/C labels or prioritized error text, with data activity at the right.
 
-Glucose uses 4x text. Plot bounds are y=72..152, time labels 184, IOB/COB 194,
+Glucose uses FreeSans Bold 18pt at native size, with 25-pixel digit height
+and a baseline at y=43. IOB/COB use native Font2 (16-pixel line height) in
+fixed columns: IOB at x5, value right edge x124, U at x132; COB at x165,
+value right edge x291, g at x299. Numeric precision remains two decimals
+for IOB and whole grams for COB. Other text retains Font0. Plot bounds are y=72..152, time labels 184, IOB/COB 194,
 basal/mode 216 and footer 231 on the 320x240 landscape display.
 
 ## Controls
@@ -97,3 +101,18 @@ pump mode shows Unknown/stale.
 The LCD stays on. There is no Wi-Fi alarm or persistent health-data cache.
 Treatments/forecasts are described in [OVERLAYS.md](OVERLAYS.md); glucose chirps
 in [ALERTS.md](ALERTS.md). Verification status is in [VERIFICATION.md](VERIFICATION.md).
+
+## Additional clarity refinements
+
+The header has fixed positions for the title, units and STALE warning, leaving
+space for the top-right icons. Missing ages show --. BG and APS ages turn amber
+when missing/stale; fresh APS remains blue. Changes at the freshness boundary
+refresh their small rectangle even when the minute text has not changed.
+
+The treatment legend includes the matching triangle/dot shapes. Y-axis bounds
+are right-aligned and retain one decimal in mmol/L. The latest actual glucose
+point is slightly larger than earlier points. Empty history shows an explicit
+No glucose in this window message. Normal button hints are gray; footer errors
+and treatment-limit warnings remain amber. IOB/COB labels and units are gray,
+with values in white. Forecast curves remain dashed and historical glucose solid;
+missing-data gaps and per-value glucose coloring are preserved.

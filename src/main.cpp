@@ -291,7 +291,7 @@ String compactAmount(float value) {
   return text;
 }
 String age(int64_t t,int64_t now) {
-  if (!model::validTime(t,now)) return "unknown";
+  if (!model::validTime(t,now)) return "--";
   int64_t m=std::max(int64_t(0),now-t)/60;
   return m>999 ? ">999m" : String(long(m))+"m";
 }
@@ -494,6 +494,7 @@ void drawWifiIndicator(bool force=false) {
 void drawLiveFields(int64_t now,bool force=false) {
   static char previousClock[9]={};
   static String previousAge,previousLoop;
+  static bool previousBgFresh=false,previousApsFresh=false;
   char clock[9]="--:--:--";
   if (now>=model::MIN_TIME) {
     time_t seconds=time_t(now);struct tm local;
@@ -508,14 +509,16 @@ void drawLiveFields(int64_t now,bool force=false) {
   int64_t glucoseTime=ui.history.count?ui.history.p[ui.history.count-1].t:0;
   String ageText="BG "+age(glucoseTime,now);
   String loopText="APS "+age(ui.status.loopTime,now);
-  if (force || ageText!=previousAge || loopText!=previousLoop) {
+  bool bgFresh=model::fresh(glucoseTime,now,cfg::SGV_STALE_SECONDS);
+  bool apsFresh=model::fresh(ui.status.loopTime,now,cfg::AAPS_STALE_SECONDS);
+  if (force || ageText!=previousAge || loopText!=previousLoop || bgFresh!=previousBgFresh || apsFresh!=previousApsFresh) {
     M5.Display.fillRect(174,32,146,12,TFT_BLACK);
-    M5.Display.setTextSize(1);M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
-    M5.Display.setCursor(178,35);M5.Display.print(ageText);
+    M5.Display.setTextSize(1);M5.Display.setTextColor(bgFresh?TFT_LIGHTGREY:TFT_ORANGE,TFT_BLACK);
+    M5.Display.setCursor(176,35);M5.Display.print(ageText);
     // Bright blue distinguishes AAPS age from the glucose age beside it.
-    M5.Display.setTextColor(0x551F,TFT_BLACK);
+    M5.Display.setTextColor(apsFresh?0x551F:TFT_ORANGE,TFT_BLACK);
     M5.Display.setCursor(315-M5.Display.textWidth(loopText),35);M5.Display.print(loopText);
-    previousAge=ageText;previousLoop=loopText;
+    previousAge=ageText;previousLoop=loopText;previousBgFresh=bgFresh;previousApsFresh=apsFresh;
   }
 }
 uint16_t glucoseColor(float value,bool fresh) {
@@ -539,10 +542,18 @@ void draw() {
   model::Point last=have?ui.history.p[ui.history.count-1]:model::Point{};
   bool fresh=have && model::fresh(last.t,now,cfg::SGV_STALE_SECONDS);
   uint16_t col=glucoseColor(last.sgv,fresh);
-  line(2,"NIGHTSCOUT   "+String(mmol?"mmol/L":"mg/dL")+"   "+(fresh?"":"STALE"),fresh?TFT_LIGHTGREY:TFT_ORANGE);
+  line(2,"NIGHTSCOUT",TFT_LIGHTGREY);
+  M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
+  M5.Display.setCursor(77,2);M5.Display.print(mmol?"mmol/L":"mg/dL");
+  if (!fresh) {M5.Display.setTextColor(TFT_ORANGE,TFT_BLACK);M5.Display.setCursor(125,2);M5.Display.print("STALE");}
   String glucoseText=have?amount(mmol?last.sgv/18.0182f:last.sgv,mmol?1:0):"--";
-  line(18,glucoseText,col,4);
+  M5.Display.setFont(&fonts::FreeSansBold18pt7b);
+  M5.Display.setTextSize(1);M5.Display.setTextColor(col,TFT_BLACK);
+  M5.Display.setTextDatum(lgfx::textdatum_t::baseline_left);
+  M5.Display.drawString(glucoseText,5,43);
   int arrowCenter=5+M5.Display.textWidth(glucoseText)+26;
+  M5.Display.setFont(&fonts::Font0);
+  M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
   drawTrendArrow(have?last.direction:"NONE",arrowCenter,33,col);
   // History, treatment lanes and a separately marked future interval.
   const auto &pred=ui.status.forecast;
@@ -564,6 +575,9 @@ void draw() {
   auto label=[&](int x,int y,const String &text,uint16_t color) {
     M5.Display.setTextColor(color,TFT_BLACK);M5.Display.setCursor(x,y);M5.Display.print(text);
   };
+  M5.Display.fillTriangle(21,layout::LEGEND_Y,18,layout::LEGEND_Y+5,24,layout::LEGEND_Y+5,TFT_ORANGE);
+  M5.Display.fillCircle(95,layout::LEGEND_Y+3,2,TFT_CYAN);
+  M5.Display.fillCircle(158,layout::LEGEND_Y+3,1,TFT_LIGHTGREY);
   label(30,layout::LEGEND_Y,"Carbs g",TFT_ORANGE);label(104,layout::LEGEND_Y,"SMB U",TFT_CYAN);label(167,layout::LEGEND_Y,"Bolus U",TFT_LIGHTGREY);
   if (predicted) {
     const char *keys[]={"IOB","COB","UAM","ZT"};
@@ -571,8 +585,12 @@ void draw() {
     for (size_t k=0;k<model::PRED_LINES;++k) label(30+k*45,layout::FORECAST_LEGEND_Y,keys[k],pred.count[k]?colors[k]:TFT_DARKGREY);
     label(225,layout::FORECAST_LEGEND_Y,"FORECAST",TFT_LIGHTGREY);
   } else label(30,layout::FORECAST_LEGEND_Y,showForecast?"Forecast unavailable/stale":"Forecast off (button C)",TFT_DARKGREY);
-  label(0,layout::PLOT_TOP,amount(mmol?high/18.0182f:high,0),TFT_LIGHTGREY);
-  label(0,layout::PLOT_BOTTOM-8,amount(mmol?low/18.0182f:low,0),TFT_LIGHTGREY);
+  auto axisLabel=[&](int y,float mgdl) {
+    String text=amount(mmol?mgdl/18.0182f:mgdl,mmol?1:0);
+    label(std::max(0,27-M5.Display.textWidth(text)),y,text,TFT_LIGHTGREY);
+  };
+  axisLabel(layout::PLOT_TOP,high);
+  axisLabel(layout::PLOT_BOTTOM-8,low);
   for (int v : {cfg::LOW_MGDL,cfg::HIGH_MGDL}) if (v>=low && v<=high)
     M5.Display.drawFastHLine(30,yy(v),284,0x2104);
   if (predicted) M5.Display.drawFastVLine(xx(now),layout::PLOT_TOP,layout::PLOT_BOTTOM-layout::PLOT_TOP+1,TFT_LIGHTGREY);
@@ -584,6 +602,9 @@ void draw() {
     M5.Display.fillCircle(x,y,1,glucoseColor(p.sgv,fresh));
     px=x;py=y;pt=p.t;previousGlucose=p.sgv;
   }
+  // Emphasize the newest actual reading without thickening the entire trace.
+  if (px>=0) M5.Display.fillCircle(px,py,2,glucoseColor(previousGlucose,fresh));
+  else label(55,layout::PLOT_TOP+20,"No glucose in this window",TFT_LIGHTGREY);
   if (predicted) {
     const uint16_t colors[]={TFT_MAGENTA,TFT_ORANGE,TFT_YELLOW,TFT_CYAN};
     for (size_t k=0;k<model::PRED_LINES;++k) for (size_t i=1;i<pred.count[k];++i) {
@@ -658,7 +679,20 @@ void draw() {
   if (predicted) label(278,layout::TIME_Y,"+1h",TFT_LIGHTGREY);
   auto &s=ui.status;
   auto value=[&](const model::Metric &m,unsigned d){ return model::fresh(m.t,now,cfg::AAPS_STALE_SECONDS)?amount(m.value,d):String("--");};
-  line(layout::IOB_Y,"IOB "+value(s.iob,2)+" U     COB "+value(s.cob,0)+" g",TFT_WHITE,2);
+  // Fixed columns and right-aligned numbers keep changing values stable.
+  M5.Display.setFont(&fonts::Font2);M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
+  M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
+  M5.Display.drawString("IOB",5,layout::IOB_Y);
+  M5.Display.drawString("U",132,layout::IOB_Y);
+  M5.Display.drawString("COB",165,layout::IOB_Y);
+  M5.Display.drawString("g",299,layout::IOB_Y);
+  M5.Display.setTextColor(TFT_WHITE,TFT_BLACK);
+  M5.Display.setTextDatum(lgfx::textdatum_t::top_right);
+  M5.Display.drawString(value(s.iob,2),124,layout::IOB_Y);
+  M5.Display.drawString(value(s.cob,0),291,layout::IOB_Y);
+  M5.Display.setFont(&fonts::Font0);
+  M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
   bool basalFresh=model::fresh(s.basal.t,now,cfg::AAPS_STALE_SECONDS) && (!s.tempUntil || now<s.tempUntil);
   String basalText="Basal "+(basalFresh?amount(s.basal.value):String("--"))+" U/h ("+s.basalKind+")";
   line(layout::BASAL_Y,basalText,TFT_WHITE);
@@ -678,7 +712,8 @@ void draw() {
     while (err.length() && M5.Display.textWidth(err+"...")>267) err.remove(err.length()-1);
     err+="...";
   }
-  line(layout::FOOTER_Y,err,TFT_ORANGE);
+  bool footerWarning=*ui.glucoseError || *ui.statusError || *ui.treatmentError || ui.treatments.limited;
+  line(layout::FOOTER_Y,err,footerWarning?TFT_ORANGE:TFT_LIGHTGREY);
   drawLiveFields(now,true);
   drawSpeakerIndicator(true);
   drawPowerIndicator(true);
