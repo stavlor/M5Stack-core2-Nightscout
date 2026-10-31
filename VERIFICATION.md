@@ -118,3 +118,12 @@ widths, age-color refresh triggers, legend shape correspondence, mmol/L axis
 precision, newest-point emphasis, empty-history text and footer/value contrast.
 These drawing changes were inspected in source and still need physical-screen
 review. No additional host tests were added for these low-impact drawing edits.
+
+## Automatic scale update
+
+Eight additional prepared checks cover empty/flat/variable/wide glucose scales,
+invalid samples and full/partial/absent target-band intersections. The suite now
+contains 96 checks; the last observed passing log covers the preceding 88.
+The new scale tests and firmware still need execution via Flash-Core2.cmd.
+Check physical graph appearance with in-range, high, low and forecast-clipping
+cases after upload. The target band is drawn before traces and treatment labels.

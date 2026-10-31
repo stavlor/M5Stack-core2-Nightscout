@@ -8,8 +8,8 @@
 | One solid cyan dot, 0.5 | 0.5 U explicitly identified as an SMB |
 | Gray dot, B1 | 1 U of another reported bolus |
 
-Markers sit inside the graph above its lower threshold line; compact labels are
-below it in one carb row and two insulin rows. Cyan SMB labels omit the S prefix;
+Markers sit inside the graph near its bottom edge; compact labels are
+below the graph in one carb row and two insulin rows. Cyan SMB labels omit the S prefix;
 units are indicated by the SMB U legend. Labels use measured text widths and can
 shift slightly with a connector to their timestamp marker. Trailing decimal zeros
 are removed and up to two decimals retained.
@@ -73,3 +73,6 @@ Neither forecasts nor a suggestion establish pump mode or delivery.
 
 Five-minute spacing is described in the [OpenAPS glossary](https://github.com/openaps/docs/blob/master/docs/docs/Resources/glossary.md).
 See [V3.md](V3.md) for requests and [VERIFICATION.md](VERIFICATION.md) for evidence.
+
+Forecasts use the automatic SGV history scale. Off-scale forecast portions are
+clipped with a FCAST CLIPPED legend warning; predictions do not stretch that scale.

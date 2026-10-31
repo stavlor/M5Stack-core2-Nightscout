@@ -6,6 +6,7 @@
 #include "power_state.h"
 #include "ns_api.h"
 #include "smb_labels.h"
+#include "graph_scale.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -286,6 +287,22 @@ inline int runParserTests() {
     check(stale.poll(false,true,true)==2,"Acknowledging an obsolete alert cannot consume a later episode");
     check(model::fresh(now-600,now,alerts::STALE_SECONDS) && !model::fresh(now-601,now,alerts::STALE_SECONDS),
       "Stale audio threshold is strictly more than ten minutes");
+  }
+  {
+    graphscale::Range range;auto bounds=range.bounds();
+    check(bounds.low==70 && bounds.high==180,"Empty graph has neutral target-range bounds");
+    range.add(110);bounds=range.bounds();
+    check(bounds.low==80 && bounds.high==140,"Flat glucose has padded minimum span without 250 ceiling");
+    range.add(150);bounds=range.bounds();
+    check(bounds.low==100 && bounds.high==160,"Visible glucose extrema define graph scale");
+    graphscale::Range wide;wide.add(40);wide.add(350);bounds=wide.bounds();
+    check(bounds.low<=40 && bounds.high>350,"Wide glucose excursions remain within padded scale");
+    graphscale::Range invalid;invalid.add(NAN);invalid.add(0);invalid.add(601);bounds=invalid.bounds();
+    check(bounds.low==70 && bounds.high==180,"Invalid glucose cannot distort graph scale");
+    float lo=0,hi=0;
+    check(graphscale::targetBand({100,160},lo,hi) && lo==100 && hi==160,"Target shading fills an entirely in-range scale");
+    check(graphscale::targetBand({40,120},lo,hi) && lo==70 && hi==120,"Target shading clips to visible intersection");
+    check(!graphscale::targetBand({200,300},lo,hi) && !graphscale::targetBand({20,60},lo,hi),"Out-of-range scales have no misleading green shading");
   }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;

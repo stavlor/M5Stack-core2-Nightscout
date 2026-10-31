@@ -15,6 +15,7 @@
 #include "ns_settings.h"
 #include "ns_api.h"
 #include "smb_labels.h"
+#include "graph_scale.h"
 #if __has_include("config.h")
 #include "config.h"
 #else
@@ -561,16 +562,23 @@ void draw() {
   int64_t start=now-int64_t(cfg::GRAPH_HOURS)*3600;
   int64_t end=now+(predicted?3600:0);
   auto xx=[&](int64_t t){return 30+int((t-start)*284/(end-start));};
-  float low=40,high=250;
-  for (size_t i=0;i<ui.history.count;++i) if (ui.history.p[i].t>=start && ui.history.p[i].t<=now) {
-    low=std::min(low,ui.history.p[i].sgv-10);high=std::max(high,ui.history.p[i].sgv+10);
+  graphscale::Range visibleRange;
+  for (size_t i=0;i<ui.history.count;++i) {
+    const auto &point=ui.history.p[i];
+    if (point.t>=start && point.t<=now) visibleRange.add(point.sgv);
   }
-  if (predicted) for (size_t k=0;k<model::PRED_LINES;++k) for (size_t i=0;i<pred.count[k];++i) {
-    int64_t t=pred.t+int64_t(i)*300;
-    float v=pred.bg[k][i];
-    if (t>=now-300 && t<=end+300 && std::isfinite(v)) {low=std::min(low,v-10);high=std::max(high,v+10);}
+  auto scale=visibleRange.bounds();float low=scale.low,high=scale.high;
+  bool forecastClipped=false;
+  if (predicted) for(size_t k=0;k<model::PRED_LINES;++k) for(size_t i=0;i<pred.count[k];++i) {
+    int64_t t=pred.t+int64_t(i)*300;float v=pred.bg[k][i];
+    if(t>=now-300 && t<=end+300 && std::isfinite(v) && (v<low || v>high)) forecastClipped=true;
   }
   auto yy=[&](float v){return layout::PLOT_BOTTOM-int((v-low)/(high-low)*(layout::PLOT_BOTTOM-layout::PLOT_TOP));};
+  float targetLow,targetHigh;
+  if (graphscale::targetBand(scale,targetLow,targetHigh)) {
+    int top=yy(targetHigh),bottom=yy(targetLow);
+    M5.Display.fillRect(30,top,285,bottom-top+1,0x0120);
+  }
   M5.Display.setTextSize(1);
   auto label=[&](int x,int y,const String &text,uint16_t color) {
     M5.Display.setTextColor(color,TFT_BLACK);M5.Display.setCursor(x,y);M5.Display.print(text);
@@ -583,7 +591,7 @@ void draw() {
     const char *keys[]={"IOB","COB","UAM","ZT"};
     const uint16_t colors[]={TFT_MAGENTA,TFT_ORANGE,TFT_YELLOW,TFT_CYAN};
     for (size_t k=0;k<model::PRED_LINES;++k) label(30+k*45,layout::FORECAST_LEGEND_Y,keys[k],pred.count[k]?colors[k]:TFT_DARKGREY);
-    label(225,layout::FORECAST_LEGEND_Y,"FORECAST",TFT_LIGHTGREY);
+    label(225,layout::FORECAST_LEGEND_Y,forecastClipped?"FCAST CLIPPED":"FORECAST",forecastClipped?TFT_ORANGE:TFT_LIGHTGREY);
   } else label(30,layout::FORECAST_LEGEND_Y,showForecast?"Forecast unavailable/stale":"Forecast off (button C)",TFT_DARKGREY);
   auto axisLabel=[&](int y,float mgdl) {
     String text=amount(mmol?mgdl/18.0182f:mgdl,mmol?1:0);
@@ -622,9 +630,9 @@ void draw() {
       }
     }
   }
-  // Markers sit inside the plot above its lower threshold line. Compact
-  // amount labels sit beneath that line, in separate carb/insulin rows.
-  const int treatmentLine=(cfg::LOW_MGDL>=low && cfg::LOW_MGDL<=high)?yy(cfg::LOW_MGDL):layout::PLOT_BOTTOM;
+  // Keep treatment lanes at the plot bottom as the glucose scale changes.
+  // Amount labels use the reserved rows beneath the plot.
+  const int treatmentLine=layout::PLOT_BOTTOM;
   const int carbMarkerY=std::max(layout::PLOT_TOP+3,treatmentLine-5);
   const int insulinMarkerY=std::max(layout::PLOT_TOP+3,treatmentLine-12);
   const int labelLeft=30,labelRight=std::min(314,xx(now));

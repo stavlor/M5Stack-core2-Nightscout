@@ -10,7 +10,7 @@ Current behavior, 2026-10-31.
 - Upper-right HH:MM:SS clock, plus speaker, power and Wi-Fi indicators.
 - Gray glucose `BG` age and blue AAPS calculation `APS` age side by side above forecasts.
   There is no separate Suggested/status-age row.
-- History and optional future pane, with treatment markers at the lower threshold.
+- History and optional future pane, with treatment markers near the plot bottom.
 - IOB/COB, then reported basal and right-aligned `Mode`. Long mode text is shortened.
 - Footer A/B/C labels or prioritized error text, with data activity at the right.
 
@@ -116,3 +116,18 @@ No glucose in this window message. Normal button hints are gray; footer errors
 and treatment-limit warnings remain amber. IOB/COB labels and units are gray,
 with values in white. Forecast curves remain dashed and historical glucose solid;
 missing-data gaps and per-value glucose coloring are preserved.
+
+## Automatic graph scale and target band
+
+The Y-axis follows actual SGVs within the visible history window (three hours by
+default). Padding is the greater of 10 mg/dL or 10% of the observed range, with
+a minimum 60 mg/dL span, rounded outward to 10 mg/dL increments and a nonnegative
+lower bound. There is no fixed 40/250 baseline. Empty history uses 70..180.
+All calculations use mg/dL; axis labels convert to mmol/L when selected.
+
+A dark green background marks only the visible intersection with 70..180 mg/dL.
+An entirely high/low window has no green band. The band extends through the
+forecast pane. Forecasts do not expand the SGV-derived scale; off-scale curves
+are clipped and the legend shows FCAST CLIPPED. Treatment markers and their label
+rows stay anchored at the graph bottom as the scale changes. Alert thresholds
+and glucose trace colors retain their existing settings.
