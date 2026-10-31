@@ -273,6 +273,20 @@ inline int runParserTests() {
       "Full treatment capacity fits without overlapping labels or losing dose totals");
     labels.reset();check(labels.size==0 && labels.arrange(30,200,width),"New snapshot clears prior SMB label groups");
   }
+  {
+    alerts::StaleState stale;
+    check(stale.poll(false,false,true)==0,"Fresh sources do not produce stale alerts");
+    check(stale.poll(true,false,true)==1 && stale.poll(true,false,true)==1,"Stale alert remains pending until played");
+    stale.played(1);check(stale.poll(true,false,true)==0,"Stale glucose sounds once per episode");
+    check(stale.poll(true,true,true)==2,"AAPS stale episode remains independent of glucose");
+    stale.played(2);check(stale.poll(true,true,true)==0,"Both stale episodes are acknowledged");
+    stale.poll(false,true,true);check(stale.poll(true,true,true)==1,"Fresh recovery rearms only recovered source");
+    check(stale.poll(true,true,false)==0 && stale.poll(true,true,true)==3,"Mute suppresses stale sounds and enabling rearms them");
+    stale.poll(false,false,true);stale.played(3);
+    check(stale.poll(false,true,true)==2,"Acknowledging an obsolete alert cannot consume a later episode");
+    check(model::fresh(now-600,now,alerts::STALE_SECONDS) && !model::fresh(now-601,now,alerts::STALE_SECONDS),
+      "Stale audio threshold is strictly more than ten minutes");
+  }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;
 }

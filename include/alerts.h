@@ -6,6 +6,19 @@ constexpr float LOW_MGDL=70, HIGH_MGDL=180;
 constexpr uint32_t LOW_REPEAT_MS=15u*60u*1000u;
 constexpr uint8_t VOLUME=80; // 0..255
 constexpr unsigned CHIRP_HZ=1800, CHIRP_MS=180;
+constexpr unsigned STALE_SECONDS=600;
+// Independent episode bits let either source go stale without hiding the other.
+class StaleState {
+  uint8_t current=0,announced=0;
+public:
+  uint8_t poll(bool glucoseStale,bool loopStale,bool enabled) {
+    current=(glucoseStale?1:0)|(loopStale?2:0);
+    announced &= current;
+    if (!enabled) {announced=0;return 0;}
+    return current & ~announced;
+  }
+  void played(uint8_t mask) {announced |= mask & current;}
+};
 enum class Event {None,Low,High};
 class State {
   Event band=Event::None;

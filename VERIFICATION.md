@@ -1,6 +1,6 @@
 # Verification record
 
-Reviewed 2026-10-29 against the current source and local evidence.
+Reviewed 2026-10-31 against the current source and local evidence.
 
 ## Current evidence
 
@@ -20,12 +20,14 @@ probe. The bundled CA and hostname checks succeeded. A generic Python user-agent
 first received 403; repeating with ESP32HTTPClient succeeded, and firmware now
 explicitly uses that user-agent on auth and data requests.
 
-The native compiler process could not launch in this restricted session. The
-observed 73-pass host log and earlier build predate the new SMB label layout.
-The current suite contains 79 checks, including six new layout checks for two-row
-placement, summed groups, bounds, dense capacity and reset. These additions and
-the updated firmware still need compilation/execution with Flash-Core2.cmd.
-Device legibility and grouping should be confirmed after upload.
+The observed host log now contains 79 passed, zero failed, covering the SMB
+layout additions. The current suite has 88 checks: nine additional checks cover
+stale episode acknowledgement, independent sources, recovery, mute and the
+strict ten-minute boundary. The readability/stale-sound changes still require
+compilation and device validation. The compiler launch was attempted again and
+failed with Windows Illegal System DLL Relocation in this session. Use the local
+Flash-Core2.cmd to run all 88 checks before building/uploading. Earlier binary
+evidence above predates these changes.
 
 ## Pinned build components
 

@@ -1,11 +1,11 @@
 # Nightscout / AAPS dashboard for M5Stack Core2 v1.3
 
-Current documentation: 2026-10-29.
+Current documentation: 2026-10-31.
 
 A read-only HTTPS dashboard using **Nightscout API v3 by default**. It shows large
 glucose values and graphical trend arrows, history, carb/SMB/bolus markers,
 OpenAPS forecasts, IOB/COB, reported basal and mode, local time, power, Wi-Fi,
-sync activity, and optional glucose chirps. It works on USB or the Core2 battery;
+sync activity, and optional glucose and missing-update sounds. It works on USB or the Core2 battery;
 the LCD stays on. It does not send dosing commands or write Nightscout data.
 This is a secondary display; use the CGM/AAPS for treatment decisions and primary alerts.
 
@@ -24,7 +24,7 @@ This is a secondary display; use the CGM/AAPS for treatment decisions and primar
 Keep your existing `include/config.h`; do not replace it with the example.
 Rebuild after a firmware/settings change. On the original Windows workstation,
 run `Flash-Core2.cmd` from the `outputs` folder beside this project. It runs the
-current **79 host checks**, builds `core2`, and uploads to **COM3**. Close M5Burner
+current **88 host checks**, builds `core2`, and uploads to **COM3**. Close M5Burner
 and serial monitors first. The helper uses workstation-specific paths and cached
 tools; it is outside the portable source ZIP. Its test log is written to
 `work/last-parser-tests.log` in the surrounding workspace.

@@ -10,7 +10,7 @@
 
 Markers sit inside the graph above its lower threshold line; compact labels are
 below it in one carb row and two insulin rows. Cyan SMB labels omit the S prefix;
-units are indicated by the SMB(U) legend. Labels use measured text widths and can
+units are indicated by the SMB U legend. Labels use measured text widths and can
 shift slightly with a connector to their timestamp marker. Trailing decimal zeros
 are removed and up to two decimals retained.
 

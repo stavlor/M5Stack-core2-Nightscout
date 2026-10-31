@@ -1,6 +1,6 @@
 # Display and controls
 
-Current behavior, 2026-10-29.
+Current behavior, 2026-10-31.
 
 ## Layout
 
@@ -8,7 +8,7 @@ Current behavior, 2026-10-29.
   unknown or uncomputable trends show `?`. SGV is mg/dL internally; mmol/L uses
   a conversion factor of 18.0182.
 - Upper-right HH:MM:SS clock, plus speaker, power and Wi-Fi indicators.
-- Gray glucose `Age` and blue AAPS calculation `Age` side by side above forecasts.
+- Gray glucose `BG` age and blue AAPS calculation `APS` age side by side above forecasts.
   There is no separate Suggested/status-age row.
 - History and optional future pane, with treatment markers at the lower threshold.
 - IOB/COB, then reported basal and right-aligned `Mode`. Long mode text is shortened.
@@ -24,7 +24,7 @@ basal/mode 216 and footer 231 on the 320x240 landscape display.
 | A, lower left | Request refresh |
 | B, center | Toggle mg/dL / mmol/L until reboot |
 | C, lower right | Toggle forecasts until reboot; initially enabled |
-| Speaker icon left of power | Toggle glucose chirps; saved across reboot |
+| Speaker icon left of power | Toggle all audible alerts; saved across reboot |
 
 Speaker cyan/blue means enabled; a red slash means muted. Its touch area is
 x174..199, y0..27. A press toggles once; holding does not repeatedly toggle.
@@ -74,6 +74,9 @@ or expiry state changes, a history item enters/leaves the window, or B/C changes
 its setting. Identical polls do not repaint the graph. Clock seconds, age text,
 power, Wi-Fi, speaker and activity update independent small rectangles. The graph
 does not continuously scroll between full redraws.
+
+The compact legend shows Carbs g, SMB U and Bolus U. The header is subdued
+and gridlines are dim gray so the solid glucose trace and dashed forecasts stand out.
 
 Glucose points and interpolated segments are green in range, orange above and
 red below display thresholds. Stale history is gray. Default freshness is ten

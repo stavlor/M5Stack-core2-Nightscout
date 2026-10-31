@@ -1,4 +1,4 @@
-# Glucose chirps and mute control
+# Glucose, stale-data sounds and mute control
 
 The built-in speaker plays one non-blocking 180 ms, 1800 Hz chirp at volume
 80/255 for a fresh out-of-range SGV, when alerts are enabled.
@@ -30,7 +30,7 @@ occurrence and chirps once. Unit and forecast button preferences are not persist
 ## Freshness and timing
 
 Only the latest actual SGV is used. Forecasts, missing/invalid readings and stale
-data do not chirp. Default SGV freshness is ten minutes. A failed fetch does not
+data do not produce glucose-range chirps. Default SGV freshness is ten minutes. A failed fetch does not
 automatically invalidate a still-fresh cached sample; it keeps aging normally.
 A stale period/reconnect does not re-arm an already-announced high. A low reminder
 due while stale waits for fresh low data.
@@ -43,3 +43,21 @@ fresh. Parser-test firmware disables the speaker and does not change saved mute.
 These chirps supplement the secondary display and do not replace CGM/AAPS alerts.
 Current test/build evidence and remaining sound/touch checks are recorded in
 [VERIFICATION.md](VERIFICATION.md).
+
+## Missing-update sound
+
+With sound enabled, actual SGV or the AAPS calculation timestamp older than
+600 seconds triggers a descending two-note sound: 950 Hz for 160 ms, followed
+by 650 Hz for 160 ms, with approximately 140 ms of silence between notes.
+The threshold is strictly more than ten minutes and independent of display
+freshness configuration. BG and AAPS episodes are tracked separately; simultaneous
+staleness shares one sound. There are no periodic stale reminders. Each source
+re-arms when fresh data returns. Missing data receives a ten-minute startup grace;
+already received but old data can alert immediately. Fetch errors alone do not
+trigger this alert while timestamps remain fresh. Calculation time, not upload
+time, determines AAPS freshness.
+
+The speaker toggle mutes both kinds of alert, stops playback and re-arms stale
+notifications on enabling. Playback is non-blocking and serialized with glucose
+chirps. Failed tone scheduling retries after 30 seconds; an episode is consumed
+only when the second note is accepted. State is in RAM and resets on reboot.

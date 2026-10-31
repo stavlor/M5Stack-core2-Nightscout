@@ -40,6 +40,8 @@ TaskHandle_t networkTask;
 bool mmol=cfg::MMOL;
 bool showForecast=true;
 alerts::State glucoseAlerts;
+alerts::StaleState staleAlerts;
+bool staleSoundActive=false;
 Preferences alertPreferences;
 bool alertPreferencesReady=false;
 std::atomic<bool> networkBusy{false};
@@ -504,8 +506,8 @@ void drawLiveFields(int64_t now,bool force=false) {
     strlcpy(previousClock,clock,sizeof(previousClock));
   }
   int64_t glucoseTime=ui.history.count?ui.history.p[ui.history.count-1].t:0;
-  String ageText="Age "+age(glucoseTime,now);
-  String loopText="Age "+age(ui.status.loopTime,now);
+  String ageText="BG "+age(glucoseTime,now);
+  String loopText="APS "+age(ui.status.loopTime,now);
   if (force || ageText!=previousAge || loopText!=previousLoop) {
     M5.Display.fillRect(174,32,146,12,TFT_BLACK);
     M5.Display.setTextSize(1);M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
@@ -537,7 +539,7 @@ void draw() {
   model::Point last=have?ui.history.p[ui.history.count-1]:model::Point{};
   bool fresh=have && model::fresh(last.t,now,cfg::SGV_STALE_SECONDS);
   uint16_t col=glucoseColor(last.sgv,fresh);
-  line(2,"NIGHTSCOUT   "+String(mmol?"mmol/L":"mg/dL")+"   "+(fresh?"":"STALE"),fresh?TFT_CYAN:TFT_ORANGE);
+  line(2,"NIGHTSCOUT   "+String(mmol?"mmol/L":"mg/dL")+"   "+(fresh?"":"STALE"),fresh?TFT_LIGHTGREY:TFT_ORANGE);
   String glucoseText=have?amount(mmol?last.sgv/18.0182f:last.sgv,mmol?1:0):"--";
   line(18,glucoseText,col,4);
   int arrowCenter=5+M5.Display.textWidth(glucoseText)+26;
@@ -562,7 +564,7 @@ void draw() {
   auto label=[&](int x,int y,const String &text,uint16_t color) {
     M5.Display.setTextColor(color,TFT_BLACK);M5.Display.setCursor(x,y);M5.Display.print(text);
   };
-  label(30,layout::LEGEND_Y,"C carbs(g)",TFT_ORANGE);label(104,layout::LEGEND_Y,"SMB(U)",TFT_CYAN);label(167,layout::LEGEND_Y,"B bolus(U)",TFT_LIGHTGREY);
+  label(30,layout::LEGEND_Y,"Carbs g",TFT_ORANGE);label(104,layout::LEGEND_Y,"SMB U",TFT_CYAN);label(167,layout::LEGEND_Y,"Bolus U",TFT_LIGHTGREY);
   if (predicted) {
     const char *keys[]={"IOB","COB","UAM","ZT"};
     const uint16_t colors[]={TFT_MAGENTA,TFT_ORANGE,TFT_YELLOW,TFT_CYAN};
@@ -572,7 +574,7 @@ void draw() {
   label(0,layout::PLOT_TOP,amount(mmol?high/18.0182f:high,0),TFT_LIGHTGREY);
   label(0,layout::PLOT_BOTTOM-8,amount(mmol?low/18.0182f:low,0),TFT_LIGHTGREY);
   for (int v : {cfg::LOW_MGDL,cfg::HIGH_MGDL}) if (v>=low && v<=high)
-    M5.Display.drawFastHLine(30,yy(v),284,TFT_DARKGREY);
+    M5.Display.drawFastHLine(30,yy(v),284,0x2104);
   if (predicted) M5.Display.drawFastVLine(xx(now),layout::PLOT_TOP,layout::PLOT_BOTTOM-layout::PLOT_TOP+1,TFT_LIGHTGREY);
   int px=-1,py=0;int64_t pt=0;float previousGlucose=NAN;
   for (size_t i=0;i<ui.history.count;++i) {
@@ -694,6 +696,7 @@ void updateGlucoseAlerts(int64_t now) {
   alerts::Event event=glucoseAlerts.poll(latest.sgv,
     have && model::fresh(latest.t,now,cfg::SGV_STALE_SECONDS),tick);
   if (event==alerts::Event::None) {retrying=false;return;}
+  if (staleSoundActive || M5.Speaker.isPlaying()) return;
   if (retrying && retryEvent==event && uint32_t(tick-lastAttempt)<30000) return;
   lastAttempt=tick;retryEvent=event;
   if (M5.Speaker.tone(alerts::CHIRP_HZ,alerts::CHIRP_MS)) {
@@ -702,10 +705,38 @@ void updateGlucoseAlerts(int64_t now) {
     retrying=true;Serial.println("Glucose chirp could not be queued; will retry while fresh.");
   }
 }
+// Two lower descending notes distinguish missing updates from the SGV chirp.
+// Called every loop; tone scheduling never blocks UI or network work.
+void updateStaleAlerts(int64_t now) {
+  static bool startupGraceDone=false,retrying=false;
+  static uint32_t phaseAt=0,lastAttempt=0;
+  static uint8_t sounding=0;
+  uint32_t tick=millis();
+  if (tick>=600000) startupGraceDone=true;
+  bool have=ui.history.count>0;
+  int64_t bg=have?ui.history.p[ui.history.count-1].t:0;
+  uint8_t pending=staleAlerts.poll(
+    (have || startupGraceDone) && !model::fresh(bg,now,alerts::STALE_SECONDS),
+    (ui.status.loopTime>0 || startupGraceDone) && !model::fresh(ui.status.loopTime,now,alerts::STALE_SECONDS),
+    glucoseAlerts.isEnabled());
+  if (staleSoundActive) {
+    if (!(pending & sounding)) {M5.Speaker.stop();staleSoundActive=false;sounding=0;return;}
+    if (uint32_t(tick-phaseAt)>=300 && !M5.Speaker.isPlaying()) {
+      if (M5.Speaker.tone(650,160)) {staleAlerts.played(sounding);retrying=false;}
+      else {retrying=true;lastAttempt=tick;}
+      staleSoundActive=false;sounding=0;
+    }
+    return;
+  }
+  if (!pending) {retrying=false;return;}
+  if (M5.Speaker.isPlaying() || (retrying && uint32_t(tick-lastAttempt)<30000)) return;
+  if (M5.Speaker.tone(950,160)) {sounding=pending;phaseAt=tick;staleSoundActive=true;}
+  else {retrying=true;lastAttempt=tick;}
+}
 void toggleGlucoseAlerts() {
   bool enabled=!glucoseAlerts.isEnabled();
   glucoseAlerts.setEnabled(enabled);
-  if (!enabled) M5.Speaker.stop();
+  if (!enabled) {M5.Speaker.stop();staleSoundActive=false;}
   if (alertPreferencesReady && !alertPreferences.putBool("alerts-on",enabled))
     Serial.println("Could not save alert toggle; current session setting still applies.");
   drawSpeakerIndicator(true);
@@ -757,6 +788,7 @@ void loop() {
   if (!rendered || dataChanged || timedChanged || unitsPressed || forecastPressed) draw();
   else if (newSecond) drawLiveFields(now);
   lastCheckedSecond=now;
+  updateStaleAlerts(now);
   drawPowerIndicator();
   drawWifiIndicator();
   drawActivityIndicator();
