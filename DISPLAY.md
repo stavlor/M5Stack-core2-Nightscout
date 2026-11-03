@@ -1,6 +1,6 @@
 # Display and controls
 
-Current behavior, 2026-10-31.
+Current behavior, 2026-11-03.
 
 ## Layout
 
@@ -25,9 +25,10 @@ basal/mode 216 and footer 231 on the 320x240 landscape display.
 
 | Control | Action |
 | --- | --- |
-| A, lower left | Request refresh |
-| B, center | Toggle mg/dL / mmol/L until reboot |
-| C, lower right | Toggle forecasts until reboot; initially enabled |
+| Cog left of speaker | Open [quick settings](SETTINGS.md) |
+| A, lower left | Request refresh; Back while settings are open |
+| B, center | Toggle mg/dL / mmol/L; saved across reboot |
+| C, lower right | Toggle forecasts; saved across reboot, initially enabled |
 | Speaker icon left of power | Toggle all audible alerts; saved across reboot |
 
 Speaker cyan/blue means enabled; a red slash means muted. Its touch area is

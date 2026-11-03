@@ -7,6 +7,7 @@
 #include "ns_api.h"
 #include "smb_labels.h"
 #include "graph_scale.h"
+#include "quick_settings.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -303,6 +304,24 @@ inline int runParserTests() {
     check(graphscale::targetBand({100,160},lo,hi) && lo==100 && hi==160,"Target shading fills an entirely in-range scale");
     check(graphscale::targetBand({40,120},lo,hi) && lo==70 && hi==120,"Target shading clips to visible intersection");
     check(!graphscale::targetBand({200,300},lo,hi) && !graphscale::targetBand({20,60},lo,hi),"Out-of-range scales have no misleading green shading");
+  }
+  {
+    check(quicksettings::validHours(1) && quicksettings::validHours(3) && quicksettings::validHours(6) && quicksettings::validHours(12) && !quicksettings::validHours(2),
+      "Quick settings expose only supported graph windows");
+    check(quicksettings::restoreHours(99,6)==6 && quicksettings::restoreHours(0,0)==3 && quicksettings::restoreHours(12,3)==12,
+      "Invalid stored graph preferences use safe defaults");
+    quicksettings::Credentials credentials;
+    check(!quicksettings::validCredentials(credentials),"Wi-Fi setup rejects empty network names");
+    strlcpy(credentials.ssid,"Example network",sizeof(credentials.ssid));
+    check(quicksettings::validCredentials(credentials),"Wi-Fi setup supports explicit open networks");
+    strlcpy(credentials.password,"short",sizeof(credentials.password));
+    check(!quicksettings::validCredentials(credentials),"Wi-Fi setup rejects short WPA passwords");
+    strlcpy(credentials.password,"example-password",sizeof(credentials.password));
+    check(quicksettings::validCredentials(credentials),"Wi-Fi setup accepts bounded WPA credentials");
+    memset(credentials.ssid,'x',sizeof(credentials.ssid));
+    check(!quicksettings::validCredentials(credentials),"Corrupt unterminated saved Wi-Fi credentials are rejected");
+    strlcpy(credentials.ssid,"bad\nnetwork",sizeof(credentials.ssid));
+    check(!quicksettings::validCredentials(credentials),"Wi-Fi setup rejects control characters in credentials");
   }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;

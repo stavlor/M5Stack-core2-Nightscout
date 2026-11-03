@@ -25,7 +25,7 @@ it and the current session's setting still applies.
 Re-enabling re-arms the current episode: a fresh out-of-range reading chirps once
 immediately, and low repeats start from that chirp. Episode/timer history stays
 in RAM. After reboot with alerts enabled, a fresh out-of-range reading is a first
-occurrence and chirps once. Unit and forecast button preferences are not persisted.
+occurrence and chirps once. Unit and forecast button preferences also persist through quick settings.
 
 ## Freshness and timing
 

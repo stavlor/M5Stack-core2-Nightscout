@@ -138,3 +138,23 @@ Label-block divider positions were checked against existing text bounds:
 upper legend text y52..69 is between lines y49/70; lower label/time text
 y154..191 is between lines y153/192, before the metric row at y194.
 These drawing-only additions still require an on-device visual check.
+## Quick settings update, 2026-11-03
+
+The last observed host log shows 96 passed, zero failed. Eight additional
+prepared checks cover timeframe restoration and bounded Wi-Fi credential
+validation, bringing the suite to 104. The installed Arduino ESP32 2.0.17
+framework provides WebServer and DNSServer; no new external library is required.
+The AP lifecycle, HTTP route and client-local-IP APIs were checked against
+installed headers.
+
+The production build was attempted: dependency discovery succeeded, including
+WebServer/DNSServer, but compiler/object-conversion processes could not execute.
+The host compiler also failed to launch with Windows Illegal System DLL
+Relocation. Consequently the new 104-check suite and firmware are not yet
+compiled/executed here. Run Flash-Core2.cmd locally for checks/build/upload.
+Earlier build artifacts and passing logs do not validate this settings change.
+
+Physical checks must cover cog/speaker touch separation, every menu control,
+reboot persistence, 12-hour history, failed/canceled setup preserving credentials,
+successful setup/reconnect, hotspot timeout/closure and continuing enabled stale
+alerts while network polling is paused. See SETTINGS.md for procedures and limits.

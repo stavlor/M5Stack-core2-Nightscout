@@ -1,6 +1,6 @@
 # Nightscout / AAPS dashboard for M5Stack Core2 v1.3
 
-Current documentation: 2026-10-31.
+Current documentation: 2026-11-03.
 
 A read-only HTTPS dashboard using **Nightscout API v3 by default**. It shows large
 glucose values and graphical trend arrows, history, carb/SMB/bolus markers,
@@ -14,6 +14,7 @@ This is a secondary display; use the CGM/AAPS for treatment decisions and primar
 | File | Contents |
 | --- | --- |
 | [V3.md](V3.md) | Authentication, request fields, response handling, legacy fallback |
+| [SETTINGS.md](SETTINGS.md) | Cog menu, saved settings and Wi-Fi setup |
 | [DISPLAY.md](DISPLAY.md) | Layout, buttons, touch toggle, clock and indicators |
 | [OVERLAYS.md](OVERLAYS.md) | Treatment markers, deduplication, predictions and limits |
 | [ALERTS.md](ALERTS.md) | Thresholds, repeats, mute persistence and sound settings |
@@ -24,7 +25,7 @@ This is a secondary display; use the CGM/AAPS for treatment decisions and primar
 Keep your existing `include/config.h`; do not replace it with the example.
 Rebuild after a firmware/settings change. On the original Windows workstation,
 run `Flash-Core2.cmd` from the `outputs` folder beside this project. It runs the
-current **96 host checks**, builds `core2`, and uploads to **COM3**. Close M5Burner
+current **104 host checks**, builds `core2`, and uploads to **COM3**. Close M5Burner
 and serial monitors first. The helper uses workstation-specific paths and cached
 tools; it is outside the portable source ZIP. Its test log is written to
 `work/last-parser-tests.log` in the surrounding workspace.
@@ -72,7 +73,7 @@ commits. A configured binary contains credentials in flash; do not publish it.
 | `include/alerts.h` | Sound thresholds, low repeat interval, volume, duration and frequency |
 
 Polling defaults to 60 seconds; failures back off from 30 to 240 seconds. A
-requests a refresh. History defaults to three hours, configurable from 1-6.
+requests a refresh. History defaults to three hours; the cog menu saves a 1/3/6/12-hour selection.
 SGV/AAPS values become stale after ten minutes by default. Display and sound
 threshold settings are separate; both default to 70/180 mg/dL.
 
@@ -151,3 +152,10 @@ string-copy/serial facilities, not the production parsing/state models.
 - [ArduinoJson v6](https://arduinojson.org/v6/)
 
 Project source is MIT licensed; dependencies retain their own licenses.
+
+## On-device configuration
+
+The cog beside the speaker opens quick settings. History, units, forecasts and
+sound persist across restarts. Wi-Fi setup starts a temporary protected hotspot
+with a phone-accessible form, tests new credentials and saves them only after
+successful connection. See [SETTINGS.md](SETTINGS.md) for setup and limits.

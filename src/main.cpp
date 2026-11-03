@@ -5,6 +5,10 @@
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
 #include <Preferences.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <esp_system.h>
+#include "quick_settings.h"
 #include <atomic>
 #include "body_buffer.h"
 #include "model.h"
@@ -26,7 +30,7 @@
 #endif
 
 extern const uint8_t rootStart[] asm("_binary_certs_root_ca_pem_start");
-static_assert(cfg::GRAPH_HOURS>=1 && cfg::GRAPH_HOURS<=6,"Graph hours must be 1..6");
+static_assert(cfg::GRAPH_HOURS>=1 && cfg::GRAPH_HOURS<=12,"Graph hours must be 1..12");
 static_assert(cfg::POLL_SECONDS>=30,"Poll no faster than 30 seconds");
 struct Snapshot {
   model::History history;
@@ -40,6 +44,14 @@ QueueHandle_t updates;
 TaskHandle_t networkTask;
 bool mmol=cfg::MMOL;
 bool showForecast=true;
+std::atomic<unsigned> graphHours{quicksettings::restoreHours(cfg::GRAPH_HOURS,3)};
+unsigned pollHours=3; // Network task takes one timeframe snapshot per polling cycle.
+bool settingsOpen=false;
+std::atomic<bool> portalRequested{false},portalCancel{false},reconnectRequested{false};
+std::atomic<int> portalState{0}; // idle, waiting, ready, testing, saved, failed, timed out, canceled
+char portalName[32]={},portalPassword[17]={};
+String stationSsid,stationPassword; // Only the network task reads/writes credentials.
+
 alerts::State glucoseAlerts;
 alerts::StaleState staleAlerts;
 bool staleSoundActive=false;
@@ -61,7 +73,7 @@ int64_t displayNow() {
 }
 bool configured() {
   String u=cfg::NS_URL;
-  return strcmp(cfg::WIFI_SSID,"YOUR_2_4_GHZ_WIFI") &&
+  return stationSsid.length()>0 && stationSsid!="YOUR_2_4_GHZ_WIFI" &&
     strcmp(cfg::NS_TOKEN,"YOUR_READ_ONLY_ACCESS_TOKEN") && strlen(cfg::NS_TOKEN)>0 &&
     u.startsWith("https://") && u.length()>8 && !u.endsWith("/") &&
     u.indexOf('@')<0 && u.indexOf('?')<0 && u.indexOf('#')<0 &&
@@ -211,19 +223,83 @@ bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char
         JsonVariantConst collection=nsapi::collection(doc.as<JsonVariantConst>(),nscfg::USE_V3);
         if (resource==Resource::Glucose) ok=model::entries(collection,now,s.history);
         else if (resource==Resource::Status) ok=model::statuses(collection,cfg::AAPS_DEVICE,now,s.status);
-        else ok=model::treatments(collection,now-int64_t(cfg::GRAPH_HOURS)*3600,now,s.treatments);
+        else ok=model::treatments(collection,now-int64_t(pollHours)*3600,now,s.treatments);
         strlcpy(error,ok?"":nscfg::USE_V3?"Invalid V3 result/status":"Expected JSON array",cap);
+        if(ok && glucose && collection.size()>=model::MAX_POINTS) strlcpy(error,"SGV history limited",cap);
       }
     }
   }
   http.end(); return ok;
 }
+void loadStationCredentials() {
+  stationSsid=cfg::WIFI_SSID;stationPassword=cfg::WIFI_PASSWORD;
+  Preferences saved;
+  if (!saved.begin("ns-wifi",true)) return;
+  quicksettings::Credentials c;
+  if(saved.getBytesLength("network")==sizeof(c) && saved.getBytes("network",&c,sizeof(c))==sizeof(c) && quicksettings::validCredentials(c)) {
+    stationSsid=c.ssid;stationPassword=c.password;
+  }
+  saved.end();
+}
+// The network task owns all Wi-Fi mutations. Normal Nightscout fetches pause
+// for setup; the UI continues aging cached readings and running enabled alerts.
+void runWifiSetup() {
+  snprintf(portalName,sizeof(portalName),"Core2-Setup-%04X",unsigned(esp_random()&0xffff));
+  snprintf(portalPassword,sizeof(portalPassword),"%08X%08X",unsigned(esp_random()),unsigned(esp_random()));
+  WiFi.setAutoReconnect(false);WiFi.mode(WIFI_AP_STA);
+  if(!WiFi.softAP(portalName,portalPassword,1,0,1)) {portalState.store(5);WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);return;}
+  WebServer server(80);DNSServer dns;
+  dns.start(53,"*",WiFi.softAPIP());
+  bool success=false;
+  auto page=[&]() {
+    if(server.client().localIP()!=WiFi.softAPIP()) {server.send(403,"text/plain","Join the Core2 setup Wi-Fi first.");return;}
+    server.sendHeader("Cache-Control","no-store");
+    server.send(200,"text/html",R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Core2 Wi-Fi</title><body style="font:18px sans-serif;max-width:420px;margin:30px auto;padding:15px"><h2>Core2 Wi-Fi</h2><p>Enter a 2.4 GHz network. Leave the password empty for an open network.</p><form method="post" action="/save"><p><label>Network name<br><input name="ssid" maxlength="32" required></label></p><p><label>Password<br><input name="password" type="password" maxlength="63" autocomplete="new-password"></label></p><button>Test and save</button></form><p>The previous settings are kept if connection fails.</p></body></html>)HTML");
+  };
+  server.on("/",HTTP_GET,page);server.onNotFound(page);
+  server.on("/save",HTTP_POST,[&]() {
+    if(server.client().localIP()!=WiFi.softAPIP()) {server.send(403,"text/plain","Join the Core2 setup Wi-Fi first.");return;}
+    server.sendHeader("Cache-Control","no-store");
+    String ssid=server.arg("ssid"),password=server.arg("password");
+    quicksettings::Credentials c;
+    if(ssid.length()>32 || password.length()>63) {server.send(400,"text/plain","Network name or password too long.");return;}
+    strlcpy(c.ssid,ssid.c_str(),sizeof(c.ssid));strlcpy(c.password,password.c_str(),sizeof(c.password));
+    if(strlen(c.ssid)!=ssid.length() || strlen(c.password)!=password.length() || !quicksettings::validCredentials(c)) {server.send(400,"text/plain","Enter a network name and an empty or 8-63 character password.");return;}
+    portalState.store(3);WiFi.disconnect(false);
+    for(int i=0;i<100 && WiFi.status()==WL_CONNECTED && !portalCancel.load();++i) vTaskDelay(pdMS_TO_TICKS(20));
+    WiFi.begin(c.ssid,c.password);
+    auto connected=[&](){return WiFi.status()==WL_CONNECTED && WiFi.SSID()==ssid;};
+    for(int i=0;i<80 && !connected() && !portalCancel.load();++i) vTaskDelay(pdMS_TO_TICKS(250));
+    if(!connected() || portalCancel.load()) {
+      portalState.store(5);server.send(400,"text/plain","Connection failed. Previous settings kept. Retry or cancel on the Core2.");return;
+    }
+    Preferences saved;bool stored=false;
+    if(saved.begin("ns-wifi",false)) {stored=saved.putBytes("network",&c,sizeof(c))==sizeof(c);saved.end();}
+    if(!stored) {portalState.store(5);server.send(500,"text/plain","Could not save. Previous settings kept.");return;}
+    stationSsid=c.ssid;stationPassword=c.password;success=true;
+    server.sendHeader("Cache-Control","no-store");server.send(200,"text/plain","Connected and saved. You can reconnect your phone to your usual network.");
+    portalState.store(4);
+  });
+  server.begin();portalState.store(2);uint32_t started=millis();
+  while(!success && !portalCancel.load() && uint32_t(millis()-started)<300000) {
+    dns.processNextRequest();server.handleClient();vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  if(success) vTaskDelay(pdMS_TO_TICKS(500));
+  else portalState.store(portalCancel.load()?7:6);
+  server.stop();dns.stop();WiFi.softAPdisconnect(true);WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);WiFi.disconnect(false);WiFi.begin(stationSsid.c_str(),stationPassword.c_str());
+}
 void worker(void*) {
   static Snapshot s;
   unsigned failures=0;
-  WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.persistent(false);
+  WiFi.persistent(false);WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true);loadStationCredentials();
   configTzTime(displaycfg::TIMEZONE,cfg::NTP1,cfg::NTP2);
   for (;;) {
+    if(portalRequested.exchange(false)) {
+      if(portalCancel.load()) portalState.store(7);else runWifiSetup();
+    }
+    if(reconnectRequested.exchange(false)) WiFi.disconnect(false);
+    pollHours=graphHours.load();
     networkBusy.store(true);
     bool good=false;
     if (!configured()) {
@@ -231,7 +307,7 @@ void worker(void*) {
       strlcpy(s.statusError,"Configuration required",sizeof(s.statusError));
     } else {
       if (WiFi.status()!=WL_CONNECTED) {
-        WiFi.disconnect(); WiFi.begin(cfg::WIFI_SSID,cfg::WIFI_PASSWORD);
+        WiFi.disconnect(); WiFi.begin(stationSsid.c_str(),stationPassword.c_str());
         for (int i=0;i<80 && WiFi.status()!=WL_CONNECTED;++i) vTaskDelay(pdMS_TO_TICKS(250));
       }
       if (WiFi.status()!=WL_CONNECTED) {
@@ -245,7 +321,7 @@ void worker(void*) {
         } else {
           // Keep a monotonic anchor so an NTP outage never freezes data age.
           s.clockAt=now; s.monoAt=monotonicSeconds();
-          const long long sinceMs=(now-int64_t(cfg::GRAPH_HOURS)*3600)*1000;
+          const long long sinceMs=(now-int64_t(pollHours)*3600)*1000;
           char since[32],until[32];snprintf(since,sizeof(since),"%lld",sinceMs);
           snprintf(until,sizeof(until),"%lld",(long long)(now+120)*1000);
           String entryPath=nscfg::USE_V3?
@@ -264,7 +340,7 @@ void worker(void*) {
             treatmentPath=String("/api/v3/treatments?date$gte=")+since+"&date$lte="+current+
               "&sort$desc=date&limit=200&fields=identifier,date,created_at,mills,timestamp,carbs,insulin,isSMB,type,isValid,isDeleted,eventType,pumpId,pumpType,pumpSerial";
           } else {
-            time_t windowStart=time(nullptr)-int64_t(cfg::GRAPH_HOURS)*3600;
+            time_t windowStart=time(nullptr)-int64_t(pollHours)*3600;
             struct tm utc;gmtime_r(&windowStart,&utc);
             char iso[32];strftime(iso,sizeof(iso),"%Y-%m-%dT%H:%M:%S.000Z",&utc);
             char legacy[320];snprintf(legacy,sizeof(legacy),
@@ -377,7 +453,7 @@ uint64_t timedFingerprint(int64_t now) {
   for (int64_t t : {s.iob.t,s.cob.t,s.basal.t,s.loopTime,s.pumpTime,s.forecast.t})
     h.integer(model::fresh(t,now,cfg::AAPS_STALE_SECONDS));
   h.integer(!s.tempUntil || now<s.tempUntil);
-  int64_t start=now-int64_t(cfg::GRAPH_HOURS)*3600;
+  int64_t start=now-int64_t(graphHours.load())*3600;
   // Repaint only when a sample enters/leaves the visible history window.
   for (size_t i=0;i<ui.history.count;++i) if (ui.history.p[i].t>=start && ui.history.p[i].t<=now) h.integer(i+1);
   h.integer(0xffff);
@@ -536,6 +612,15 @@ void glucoseSegment(int x1,int y1,float v1,int x2,int y2,float v2,bool fresh) {
       y1+(y2-y1)*i/std::max(1,steps),glucoseColor(v1+(v2-v1)*part,fresh));
   }
 }
+void drawSettingsCog() {
+  const int x=164,y=7;const uint16_t color=TFT_LIGHTGREY;
+  M5.Display.drawCircle(x,y,4,color);M5.Display.drawCircle(x,y,1,color);
+  for(int i=0;i<8;++i) {
+    float a=i*0.78539816f;
+    M5.Display.drawLine(x+int(std::lround(4*std::cos(a))),y+int(std::lround(4*std::sin(a))),
+      x+int(std::lround(6*std::cos(a))),y+int(std::lround(6*std::sin(a))),color);
+  }
+}
 void draw() {
   M5.Display.fillScreen(TFT_BLACK);
   int64_t now=displayNow();
@@ -559,7 +644,7 @@ void draw() {
   // History, treatment lanes and a separately marked future interval.
   const auto &pred=ui.status.forecast;
   bool predicted=showForecast && fresh && model::fresh(pred.t,now,cfg::AAPS_STALE_SECONDS);
-  int64_t start=now-int64_t(cfg::GRAPH_HOURS)*3600;
+  int64_t start=now-int64_t(graphHours.load())*3600;
   int64_t end=now+(predicted?3600:0);
   auto xx=[&](int64_t t){return 30+int((t-start)*284/(end-start));};
   graphscale::Range visibleRange;
@@ -687,7 +772,7 @@ void draw() {
       label(tx,y,text,TFT_LIGHTGREY);lastBolusEnd[row]=tx+width+3;break;
     }
   }
-  label(30,layout::TIME_Y,"-"+String(cfg::GRAPH_HOURS)+"h",TFT_LIGHTGREY);
+  label(30,layout::TIME_Y,"-"+String(graphHours.load())+"h",TFT_LIGHTGREY);
   label(std::max(62,xx(now)-12),layout::TIME_Y,"now",TFT_LIGHTGREY);
   if (predicted) label(278,layout::TIME_Y,"+1h",TFT_LIGHTGREY);
   // Treatment and time labels occupy y154..191, between these dividers.
@@ -731,6 +816,7 @@ void draw() {
   bool footerWarning=*ui.glucoseError || *ui.statusError || *ui.treatmentError || ui.treatments.limited;
   line(layout::FOOTER_Y,err,footerWarning?TFT_ORANGE:TFT_LIGHTGREY);
   drawLiveFields(now,true);
+  drawSettingsCog();
   drawSpeakerIndicator(true);
   drawPowerIndicator(true);
   drawWifiIndicator(true);
@@ -790,9 +876,81 @@ void toggleGlucoseAlerts() {
   if (!enabled) {M5.Speaker.stop();staleSoundActive=false;}
   if (alertPreferencesReady && !alertPreferences.putBool("alerts-on",enabled))
     Serial.println("Could not save alert toggle; current session setting still applies.");
-  drawSpeakerIndicator(true);
+  if (!settingsOpen) drawSpeakerIndicator(true);
   // Muting clears retries immediately; enabling evaluates the current fresh SGV.
   updateGlucoseAlerts(displayNow());
+}
+void saveDisplaySettings() {
+  if(!alertPreferencesReady) return;
+  bool ok=alertPreferences.putUInt("hours",graphHours.load())>0;
+  ok=(alertPreferences.putBool("mmol",mmol)>0) && ok;
+  ok=(alertPreferences.putBool("forecast",showForecast)>0) && ok;
+  if(!ok) Serial.println("Display setting save failed; session values remain active.");
+}
+void drawSettings() {
+  M5.Display.fillScreen(TFT_BLACK);M5.Display.setFont(&fonts::Font2);
+  M5.Display.setTextSize(1);M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
+  M5.Display.setTextColor(TFT_WHITE,TFT_BLACK);M5.Display.drawString("Quick settings",8,3);
+  M5.Display.setFont(&fonts::Font0);
+  auto text=[](int x,int y,const String &value,uint16_t color=TFT_LIGHTGREY) {
+    M5.Display.setTextColor(color,TFT_BLACK);M5.Display.setCursor(x,y);M5.Display.print(value);
+  };
+  auto button=[&](int x,int y,int w,const String &value,bool selected=false) {
+    M5.Display.drawRoundRect(x,y,w,28,4,selected?TFT_CYAN:0x632C);
+    int tx=x+(w-M5.Display.textWidth(value))/2;text(tx,y+10,value,selected?TFT_CYAN:TFT_WHITE);
+  };
+  button(258,2,58,"Back");
+  int state=portalState.load();
+  if(state==1 || state==2 || state==3 || state==5) {
+    text(8,40,"Wi-Fi setup",TFT_CYAN);
+    if(state==1) text(8,60,"Waiting for current fetch to finish...");
+    else {
+      text(8,61,"Join this temporary network on your phone:");
+      text(8,80,portalName,TFT_WHITE);
+      text(8,100,String("Password: ")+portalPassword,TFT_WHITE);
+      text(8,124,"Then open http://192.168.4.1",TFT_CYAN);
+      text(8,146,state==3?"Testing connection...":state==5?"Test/save failed. Retry on your phone.":"Enter your 2.4 GHz network and password.");
+      text(8,171,"Setup closes after 5 minutes.");
+      text(8,187,"Nightscout updates pause during setup.");
+      text(8,203,"Cached data ages; enabled alerts keep running.");
+    }
+    text(8,226,"Back cancels setup.");return;
+  }
+  text(8,35,"Graph history");
+  const unsigned hours[]={1,3,6,12};
+  for(int i=0;i<4;++i)button(8+i*77,49,71,String(hours[i])+" hours",graphHours.load()==hours[i]);
+  button(8,87,146,String("Sound: ")+(glucoseAlerts.isEnabled()?"On":"Off"),glucoseAlerts.isEnabled());
+  button(166,87,146,String("Forecast: ")+(showForecast?"On":"Off"),showForecast);
+  button(8,125,146,String("Units: ")+(mmol?"mmol/L":"mg/dL"));
+  button(166,125,146,"Wi-Fi setup");
+  button(8,163,304,"Reconnect saved Wi-Fi");
+  String network=WiFi.status()==WL_CONNECTED?WiFi.SSID():String("Disconnected");
+  while(network.length() && M5.Display.textWidth(network)>290) network.remove(network.length()-1);
+  text(8,202,network);
+  text(8,222,state==4?"Wi-Fi connected and saved":state==6?"Wi-Fi setup timed out":state==7?"Wi-Fi setup canceled":"Settings save automatically",state==4?TFT_GREEN:TFT_LIGHTGREY);
+}
+void closeSettings() {
+  int state=portalState.load();
+  if(state==1 || state==2 || state==3 || state==5) portalCancel.store(true);
+  settingsOpen=false;rendered=false;
+}
+void settingsTouch(int x,int y) {
+  if(x>=258 && y<32) {closeSettings();return;}
+  int state=portalState.load();
+  if(state==1 || state==2 || state==3 || state==5) return;
+  if(y>=49 && y<77 && x>=8 && x<312) {
+    const unsigned hours[]={1,3,6,12};int column=(x-8)/77;
+    if(column<4 && (x-8)%77<71) {graphHours.store(hours[column]);saveDisplaySettings();xTaskNotifyGive(networkTask);}
+  } else if(y>=87 && y<115) {
+    if(x>=8 && x<154) toggleGlucoseAlerts();
+    else if(x>=166 && x<312) {showForecast=!showForecast;saveDisplaySettings();}
+  } else if(y>=125 && y<153) {
+    if(x>=8 && x<154) {mmol=!mmol;saveDisplaySettings();}
+    else if(x>=166 && x<312) {
+      portalCancel.store(false);portalState.store(1);portalRequested.store(true);xTaskNotifyGive(networkTask);
+    }
+  } else if(y>=163 && y<191 && x>=8 && x<312) {reconnectRequested.store(true);xTaskNotifyGive(networkTask);}
+  drawSettings();
 }
 void setup() {
   auto c=M5.config(); c.internal_imu=false; c.internal_mic=false;
@@ -809,7 +967,12 @@ void setup() {
   for (;;) delay(1000);
 #endif
   alertPreferencesReady=alertPreferences.begin("ns-display",false);
-  if (alertPreferencesReady) glucoseAlerts.setEnabled(alertPreferences.getBool("alerts-on",true));
+  if (alertPreferencesReady) {
+    glucoseAlerts.setEnabled(alertPreferences.getBool("alerts-on",true));
+    graphHours.store(quicksettings::restoreHours(alertPreferences.getUInt("hours",cfg::GRAPH_HOURS),cfg::GRAPH_HOURS));
+    mmol=alertPreferences.getBool("mmol",cfg::MMOL);
+    showForecast=alertPreferences.getBool("forecast",true);
+  }
   updates=xQueueCreate(1,sizeof(Snapshot));
   if (!updates || xTaskCreatePinnedToCore(worker,"network",49152,nullptr,1,&networkTask,0)!=pdPASS) {
     line(20,"Memory/task allocation failed",TFT_RED); for (;;) delay(1000);
@@ -819,29 +982,40 @@ void setup() {
 void loop() {
   M5.update();
   for (size_t i=0;i<M5.Touch.getCount();++i) {
-    const auto &touch=M5.Touch.getDetail(i);
-    if (touch.wasPressed() && touch.x>=174 && touch.x<200 && touch.y>=0 && touch.y<28) {
-      toggleGlucoseAlerts();break;
+    const auto &touch=M5.Touch.getDetail(i);if(!touch.wasPressed()) continue;
+    if(settingsOpen) settingsTouch(touch.x,touch.y);
+    else if(touch.y>=0 && touch.y<28) {
+      if(touch.x>=148 && touch.x<174) {settingsOpen=true;drawSettings();}
+      else if(touch.x>=174 && touch.x<200) toggleGlucoseAlerts();
     }
+    break;
   }
-  if (M5.BtnA.wasPressed()) xTaskNotifyGive(networkTask);
-  bool unitsPressed=M5.BtnB.wasPressed(), forecastPressed=M5.BtnC.wasPressed();
-  if (unitsPressed) mmol=!mmol;
-  if (forecastPressed) showForecast=!showForecast;
+  bool a=M5.BtnA.wasPressed(),b=M5.BtnB.wasPressed(),c=M5.BtnC.wasPressed();
+  bool unitsPressed=false,forecastPressed=false;
+  if(settingsOpen) {if(a) closeSettings();}
+  else {
+    if(a) xTaskNotifyGive(networkTask);
+    unitsPressed=b;forecastPressed=c;
+    if(b) mmol=!mmol;
+    if(c) showForecast=!showForecast;
+    if(b || c) saveDisplaySettings();
+  }
   bool received=xQueueReceive(updates,&ui,0)==pdTRUE;
   if (received) {lastAppliedAt=millis();haveApplied=true;}
   bool dataChanged=received && payloadFingerprint()!=renderedPayload;
   static int64_t lastCheckedSecond=-1;
-  int64_t now=displayNow();
-  bool newSecond=now!=lastCheckedSecond;
-  if (received || newSecond) updateGlucoseAlerts(now);
-  bool timedChanged=(newSecond || received) && timedFingerprint(now)!=renderedTimed;
-  if (!rendered || dataChanged || timedChanged || unitsPressed || forecastPressed) draw();
-  else if (newSecond) drawLiveFields(now);
-  lastCheckedSecond=now;
+  int64_t now=displayNow();bool newSecond=now!=lastCheckedSecond;
+  if(received || newSecond) updateGlucoseAlerts(now);
   updateStaleAlerts(now);
-  drawPowerIndicator();
-  drawWifiIndicator();
-  drawActivityIndicator();
-  delay(10);
+  bool timedChanged=(newSecond || received) && timedFingerprint(now)!=renderedTimed;
+  if(settingsOpen) {
+    static int previousPortal=-1,previousWifi=-1;
+    int state=portalState.load(),wifi=int(WiFi.status());
+    if(state!=previousPortal || wifi!=previousWifi) {drawSettings();previousPortal=state;previousWifi=wifi;}
+  } else {
+    if(!rendered || dataChanged || timedChanged || unitsPressed || forecastPressed) draw();
+    else if(newSecond) drawLiveFields(now);
+    drawPowerIndicator();drawWifiIndicator();drawActivityIndicator();
+  }
+  lastCheckedSecond=now;delay(10);
 }
