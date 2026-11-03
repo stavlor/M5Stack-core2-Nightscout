@@ -20,15 +20,14 @@ This is a secondary display; use the CGM/AAPS for treatment decisions and primar
 | [ALERTS.md](ALERTS.md) | Thresholds, repeats, mute persistence and sound settings |
 | [VERIFICATION.md](VERIFICATION.md) | Actual test/build evidence and remaining checks |
 
-## Existing configured installation
+## Portable build and flash tool
 
-Keep your existing `include/config.h`; do not replace it with the example.
-Rebuild after a firmware/settings change. On the original Windows workstation,
-run `Flash-Core2.cmd` from the `outputs` folder beside this project. It runs the
-current **104 host checks**, builds `core2`, and uploads to **COM3**. Close M5Burner
-and serial monitors first. The helper uses workstation-specific paths and cached
-tools; it is outside the portable source ZIP. Its test log is written to
-`work/last-parser-tests.log` in the surrounding workspace.
+See [RELEASE.md](RELEASE.md) for the release bundle quick start. Flash-Core2.cmd
+on Windows and flash.py on any supported Python system build/upload using your
+local PlatformIO installation. The first run creates include/config.h only if
+missing, then stops for editing. Existing private config is preserved. The helper
+supports explicit ports, build-only mode, port listing and serial monitoring.
+It runs a normal PlatformIO build; host fixture tests are a separate step.
 
 ## Fresh setup from the ZIP
 
@@ -110,7 +109,7 @@ Malformed/oversized responses retain prior data while it ages; valid empty
 collections clear corresponding data. Metric strings/nulls/booleans/nonfinite
 values are rejected. SGV must be 20-600 mg/dL; records over two minutes in the
 future are rejected. Treatment markers exclude any future event. Health data
-stays in RAM; only the alert-enabled preference persists.
+stays in RAM; display preferences and saved Wi-Fi credentials persist in NVS.
 
 The footer prioritizes SGV errors, then AAPS, then treatments. Long errors are
 ellipsized beside the activity indicator. Serial diagnostics contain codes and
@@ -125,7 +124,8 @@ sizes, not credentials or response bodies. Check:
 
 Networking runs separately from the UI. A very slow peer can extend a response
 by sending bytes within each read timeout, but the UI remains responsive.
-Non-ASCII pump mode text may not render correctly. There is no captive portal.
+Non-ASCII pump mode text may not render correctly. Wi-Fi setup starts a temporary
+protected hotspot and captive page only when selected in quick settings.
 
 ## Tests and references
 

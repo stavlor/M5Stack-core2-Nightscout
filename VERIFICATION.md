@@ -158,3 +158,21 @@ Physical checks must cover cog/speaker touch separation, every menu control,
 reboot persistence, 12-hour history, failed/canceled setup preserving credentials,
 successful setup/reconnect, hotspot timeout/closure and continuing enabled stale
 alerts while network polling is paused. See SETTINGS.md for procedures and limits.
+## Release packaging, 2026-11-03
+
+The latest observed workstation host log contains 104 passed, zero failed,
+including the quick-settings checks. This supersedes the earlier note that
+those eight checks had not yet run; it is not a new firmware test run here.
+
+The portable release tool has 14 Python tests, all passed during packaging.
+They cover first-use config creation without uploading, preserving existing
+config, command/port forwarding, build-only mode, monitor/list behavior, error
+exit codes and PlatformIO discovery on PATH/current Python/VS Code's environment.
+They do not flash a device or run the firmware fixture suite. The release
+helper performs normal PlatformIO builds and leaves C++ host checks separate.
+
+Release ZIP integrity, each per-file SHA256, the explicit source/tool whitelist,
+and private configuration/build/log exclusions were verified. Private configured
+string values were checked against archive contents without printing them.
+The bundle contains no configured binary. A fresh production build and physical
+settings-flow validation remain unconfirmed by this packaging task.

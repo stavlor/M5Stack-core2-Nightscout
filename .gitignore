@@ -3,3 +3,9 @@
 include/config.h
 *.bin
 *.elf
+
+__pycache__/
+*.pyc
+parser-tests
+parser-tests.exe
+.DS_Store
