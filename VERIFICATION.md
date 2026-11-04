@@ -1,188 +1,114 @@
 # Verification record
 
-Reviewed 2026-10-31 against the current source and local evidence.
+Reviewed 2026-11-04 for the Graph focus / LAN portal source candidate.
 
 ## Current evidence
 
-| Area | Evidence | Limit |
+| Area | Result | Limit |
 | --- | --- | --- |
-| Earlier host regression suite | Local `work/last-parser-tests.log`: 73 passed, 0 failed | Does not emulate display, radio, TLS, touch or speaker hardware |
-| Earlier ESP32 build output | Prior `firmware.bin` and `firmware.elf`, binary size 1,173,584 bytes, predate the SMB label changes | File evidence does not prove successful upload or complete physical validation |
-| Live v3 authentication | Approved probe exchanged saved subject token for a JWT using validated HTTPS | Does not exercise expiry over time on the ESP32 |
-| Live v3 data queries | All three collections returned HTTP 200 with valid status/result arrays; AAPS snapshot and SGV date/value fields present | Point-in-time compatibility check |
-| Baseline physical operation | User confirmed earlier firmware worked on Core2 and supplied working screen images | Not independent confirmation of every current feature |
+| Previous C++ host suite | Latest saved workstation log: 104 passed, 0 failed | Predates this candidate |
+| Current C++ suite | 140 checks prepared; 36 new runtime/access cases | Cannot execute compiler here; new cases unrun |
+| ESP32 production build attempt | Pinned platform/libraries resolved; compiler and object converter could not execute | No new firmware binary or compiler diagnostics for this source |
+| Portable flash helper | 14 isolated Python tests passed | Does not invoke a real device/compiler in these tests |
+| Embedded portal controller | Node checks passed against the actual embedded script | DOM/HTTP mocks; does not test the ESP32 HTTP server/radio |
+| Source audit | Delimiter balance, portal IDs/references, pinned header APIs checked | Not a substitute for C++ compilation |
 
-The live entries response contained 36 records / 2,431 bytes; device status two
-records / 7,142 bytes with a matching OpenAPS snapshot; treatments 28 records /
-6,852 bytes. Counts describe one approved check, not a fixed expected result.
-No credentials, private URLs or clinical values were displayed or saved by that
-probe. The bundled CA and hostname checks succeeded. A generic Python user-agent
-first received 403; repeating with ESP32HTTPClient succeeded, and firmware now
-explicitly uses that user-agent on auth and data requests.
+The host compiler launch fails with Windows Illegal System DLL Relocation in this
+session. PlatformIO reaches compilation but Windows cannot execute the compiler
+or PEM object converter. Run the local Flash-Core2.cmd to compile/run all 140 host
+fixtures before building/uploading. The portable release helper runs a normal
+PlatformIO production build; desktop fixture checks are separate.
 
-The latest saved work/last-parser-tests.log contains 88 passed, zero failed,
-including SMB layout and stale-alert state checks. This is observed workstation
-evidence, not a new compiler run in this session. The current font and additional
-drawing changes still need building and physical-screen review. Compiler launch
-in this session previously failed with Windows Illegal System DLL Relocation;
-use Flash-Core2.cmd to run checks before building/uploading. Earlier binary
-figures above are historical and do not validate the latest drawing source.
+Older .bin/.elf files and older successful build figures are historical. They
+do not validate this candidate and are not bundled. No live Nightscout request
+was made as part of this update. Earlier user-approved v3 checks established
+point-in-time compatibility: auth succeeded, entries/device-status/treatments
+returned HTTP 200, and validated TLS succeeded with the included CA bundle.
 
-## Pinned build components
+## New regression cases
 
-| Component | Selection |
-| --- | --- |
-| PlatformIO platform | espressif32 6.12.0 |
-| Board/framework | m5stack-core2, Arduino ESP32 2.0.17 |
-| Framework package observed | 3.20017.241212+sha.dcc1105b |
-| Xtensa compiler | GCC 8.4.0, esp-2021r2-patch5 |
-| M5Unified / M5GFX | 0.2.28 / 0.2.35 |
-| ArduinoJson | 6.21.5 |
-| HTTPS | Framework HTTPClient and WiFiClientSecure |
+Runtime profile version, terminated strings, HTTPS URL restrictions, numeric and
+boolean types, history/poll/freshness/brightness limits, ordered thresholds,
+blank-token preservation, changed-URL credential isolation, blank-password preservation, explicit open networks,
+duplicate/empty Wi-Fi lists, ordered secret association, bounded hotspot network
+promotion, public JSON secret exclusion, embedded NUL rejection and nonmutating
+patch parsing. Access cases cover initial lock, five-attempt cooldown, cookie
+matching, inactivity renewal/expiry, counter wrap and revocation. A custom
+threshold case checks production glucose-alert inputs.
 
-Core2 v1.3 uses AXP192, a 320x240 LCD and CH9102 USB serial. PSRAM is enabled.
-IMU/microphone initialization is disabled; the internal speaker is enabled for
-production chirps and disabled in parser-test firmware. Hardware initialization
-is handled by M5Unified. APIs used for speaker/touch, power status/ADC reads,
-Preferences, timezone and HTTP handling were checked against installed sources.
-Earlier baseline production and parser-test environments compiled successfully;
-their old image/RAM figures are not presented as measurements of current firmware.
+Portal browser-controller checks exercise initial/incorrect/correct login,
+clearing entered codes, blank secret payloads, network reordering/new network
+entry, CSRF header forwarding, stale-save errors, lock cleanup and same-origin /
+no-store requests. No real password/token or private URL appears in test fixtures.
 
-## What the 73 host checks cover
+Existing parser tests cover SGV/status/treatment/forecast validation, bounded
+HTTP buffers, timestamp handling, duplicate/tombstone rules, stale state, SMB
+label grouping, graph scale/target intersection, glucose/stale episodes, power
+classification, v3 envelopes and JWT checks. Host shims replace Arduino serial
+and string-copy facilities, not the parsing/state models. Fixture firmware now
+uses a dedicated 49 KiB task to avoid placing parser history temporaries on the
+small Arduino loop stack. It starts no Wi-Fi, tones or saved-preference writes.
 
-- SGV numeric validation, timestamps, sorting, duplicate samples and stale limits.
-- Object/array IOB, zero values, COB, pump/base/temp basal timing and uploader selection.
-- Empty/invalid roots and production JSON filters.
-- Fixed response-buffer chunk writes, exact bounds, overflow and allocation failure.
-- Treatment types/times, invalid/deleted/future/extended records, public IDs,
-  SMB pump/exact-time deduplication, filtering and bounded newest-event retention.
-- Forecast arrays, invalid-sample gaps, whole-run selection, future/stale/absent
-  calculations and sample bounds.
-- Alert first occurrences, no high repeats, low timer/re-arm/wrap behavior,
-  stale suppression, pending tones and persistent-setting state-model behavior.
-- Muted/re-enabled alert behavior and power-input classification.
-- V3 envelopes, canonical dates, tombstones, legacy-array separation, JWT response
-  validation and renewal boundaries.
+## Compatibility and storage review
 
-Persistence is tested as state behavior on the host, not actual ESP32 NVS writes.
-HTTP 401 replay/cooldown and real JWT renewal are reviewed implementation paths;
-they were not simulated by a full transport mock. The host shim replaces only
-Arduino string-copy and serial interfaces. Geometric bounds were also checked
-for the 320x240 layout; actual touch calibration and legibility require hardware.
+Pinned: espressif32 6.12.0, m5stack-core2, Arduino ESP32 2.0.17, M5Unified 0.2.28,
+M5GFX 0.2.35, ArduinoJson 6.21.5. WebServer/DNSServer/Preferences/Wi-Fi/TLS and
+FreeRTOS come from that framework. PSRAM remains enabled. No new external
+library is needed. Core2 v1.3 uses AXP192, CH9102 USB serial and 320×240 LCD.
+Installed headers confirm baseline_right, FreeSansBold12pt7b, collected-header
+array API, AP lifecycle and client local-IP methods used by the implementation.
 
-The local Flash-Core2.cmd compiles/runs this suite before building/uploading. The
-portable PlatformIO project also provides `parser-tests` for on-device fixtures;
-that environment does not connect to Wi-Fi, play tones or alter mute preferences.
+Main UI, network worker and portal task use separate settings copies. A mutex
+protects complete versioned NVS profile commits with revision checks; a network
+gate serializes Wi-Fi changes and HTTPS connection tests against polling. Old
+Nightscout-identity snapshots are discarded, and JWT/range episodes reset on
+identity changes. Large snapshot resets construct in place rather than on the
+small UI stack. Portal JSON documents prefer PSRAM to reduce competition with TLS internal
+heap allocations. These paths require runtime/heap validation on the device.
 
-## TLS roots and source checks
+The LAN service starts disabled after boot and runs on port 3000 only when
+requested with a usable station connection. AP recovery pauses it. The current
+IP, same-origin writes, session cookie and CSRF token gate configuration access.
+Public profile serialization returns no stored token/password values. JSON
+request parsing checks an 8 KiB body and nesting limit eight; the framework's
+HTTP parser receives the request before that application check. This is a small
+trusted-LAN service, not an Internet-facing appliance. Traffic is local HTTP;
+NVS and configured firmware have no application-level credential encryption.
+
+## Display geometry review
+
+Graph y62..162 normally, y62..152 when a second insulin row is placed. The compact
+legend fits y52..59 between y49/60 dividers. Carb/insulin labels end by y183;
+time labels y184..191, divider y192, metric values baseline y211 and basal y216.
+Metric labels are at y201. Refresh/settings/forecast hints fit y229..239 outside
+the x278 activity rectangle. Threshold labels are suppressed near scale bounds.
+The graph retains per-value trace colors, visible range bands and clipped dashed
+forecasts; CLIP/asterisk warns without occupying the normal shortcut footer.
+Actual font metrics, label collisions and treatment density need screen review.
+
+## TLS roots
 
 | Root | DER SHA256 |
 | --- | --- |
 | ISRG Root X1 | 96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6 |
 | GTS Root R4 | 349dfa4058c5e263123b398ae795573c4e1313c83fe68f93556cd5e8031b3c7d |
 
-The first root came from Let's Encrypt's official repository. The Google root
-was extracted from installed certifi and checked against Google's publication.
-The bundle parsed as two CA certificates. No insecure TLS fallback exists.
+The root bundle is unchanged. HTTPS chain/hostname/time validation and redirect
+rejection remain enabled. JWTs remain in RAM; the saved read-only subject token
+is in the private runtime profile. No response bodies or secrets are logged.
 
-- [ISRG Root X1](https://letsencrypt.org/certs/isrgrootx1.pem)
-- [Google published root fingerprints](https://pki.goog/repo/cps/5.14/GTS-CPS.html)
-- [Core2 v1.3](https://docs.m5stack.com/en/core/Core2_v1.3)
-- [AXP192 register definitions](https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/docs/datasheet/core/AXP192_datasheet_cn.pdf)
-- [Nightscout v3 specification](https://github.com/nightscout/cgm-remote-monitor/blob/master/lib/api3/swagger.yaml)
-- [Nightscout authorization](https://github.com/nightscout/cgm-remote-monitor/blob/master/lib/authorization/index.js)
-- [AAPS pump status serializer at inspected revision](https://github.com/nightscout/AndroidAPS/blob/aa16db64196e570b15bf41e85422fc159c058308/implementation/src/main/kotlin/app/aaps/implementation/pump/PumpStatusProviderImpl.kt)
+## Remaining device acceptance
 
-## Current device checks still needing confirmation
+Compile and run all 140 C++ fixtures, then build production. Confirm migration
+from existing settings, normal/reboot preference persistence and portal OFF after
+restart. Check the address/code display, login limits, session expiry, secret
+preservation, API rejection of stale revisions/incorrect origin/CSRF and closure
+when disabled. Exercise URL/token/API changes without old data reappearing.
 
-Compare v3 values, timestamps, treatment markers and projections with Nightscout;
-check time/units/arrows and dense labels; verify B/C and speaker touch handling;
-confirm mute persists; test low/high episode timing and audibility; check USB
-unplug/reconnect and Wi-Fi icons; confirm activity and identical-poll redraw behavior.
-Verify stale suppression after network loss, recovery, token renewal/revocation,
-CA/hostname failures and bounded memory behavior during a sustained powered run.
-Do not infer that these passed from a successful host suite or a generated binary.
-
-## Font layout source checks
-
-FreeSansBold18pt7b is included by the installed M5GFX; its digit glyphs are
-25 pixels high with 19-pixel advances. The glucose baseline y43 places digits
-at y19..43 inside the existing header area. Native Font2 is used for the metric
-row at y194; fonts and text alignment reset before other drawing. Source checks
-confirm both fonts and the baseline/right-alignment APIs exist in the pinned
-library. Actual font appearance and long-value legibility need device review;
-no new host tests were added for this drawing-only change.
-
-The additional display review covered fixed header/icon bounds, compact age
-widths, age-color refresh triggers, legend shape correspondence, mmol/L axis
-precision, newest-point emphasis, empty-history text and footer/value contrast.
-These drawing changes were inspected in source and still need physical-screen
-review. No additional host tests were added for these low-impact drawing edits.
-
-## Automatic scale update
-
-Eight additional prepared checks cover empty/flat/variable/wide glucose scales,
-invalid samples and full/partial/absent target-band intersections. The suite now
-contains 96 checks; the last observed passing log covers the preceding 88.
-The new scale tests and firmware still need execution via Flash-Core2.cmd.
-Check physical graph appearance with in-range, high, low and forecast-clipping
-cases after upload. The target band is drawn before traces and treatment labels.
-
-The graph background now shades all visible rows using fixed display bands:
-below 70 red, 70..180 green, above 180..249 orange, above 249 red. Drawing
-uses the inverse of the current scale so bands remain clipped without gaps.
-This drawing-only refinement adds no tests; verify contrast and boundary colors
-on the device. It does not change alerts or trace-color thresholds.
-
-Label-block divider positions were checked against existing text bounds:
-upper legend text y52..69 is between lines y49/70; lower label/time text
-y154..191 is between lines y153/192, before the metric row at y194.
-These drawing-only additions still require an on-device visual check.
-## Quick settings update, 2026-11-03
-
-The last observed host log shows 96 passed, zero failed. Eight additional
-prepared checks cover timeframe restoration and bounded Wi-Fi credential
-validation, bringing the suite to 104. The installed Arduino ESP32 2.0.17
-framework provides WebServer and DNSServer; no new external library is required.
-The AP lifecycle, HTTP route and client-local-IP APIs were checked against
-installed headers.
-
-The production build was attempted: dependency discovery succeeded, including
-WebServer/DNSServer, but compiler/object-conversion processes could not execute.
-The host compiler also failed to launch with Windows Illegal System DLL
-Relocation. Consequently the new 104-check suite and firmware are not yet
-compiled/executed here. Run Flash-Core2.cmd locally for checks/build/upload.
-Earlier build artifacts and passing logs do not validate this settings change.
-
-Physical checks must cover cog/speaker touch separation, every menu control,
-reboot persistence, 12-hour history, failed/canceled setup preserving credentials,
-successful setup/reconnect, hotspot timeout/closure and continuing enabled stale
-alerts while network polling is paused. See SETTINGS.md for procedures and limits.
-## Release packaging, 2026-11-03
-
-The latest observed workstation host log contains 104 passed, zero failed,
-including the quick-settings checks. This supersedes the earlier note that
-those eight checks had not yet run; it is not a new firmware test run here.
-
-The portable release tool has 14 Python tests, all passed during packaging.
-They cover first-use config creation without uploading, preserving existing
-config, command/port forwarding, build-only mode, monitor/list behavior, error
-exit codes and PlatformIO discovery on PATH/current Python/VS Code's environment.
-They do not flash a device or run the firmware fixture suite. The release
-helper performs normal PlatformIO builds and leaves C++ host checks separate.
-
-Release ZIP integrity, each per-file SHA256, the explicit source/tool whitelist,
-and private configuration/build/log exclusions were verified. Private configured
-string values were checked against archive contents without printing them.
-The bundle contains no configured binary. A fresh production build and physical
-settings-flow validation remain unconfirmed by this packaging task.
-
-## Bottom shortcut update
-
-B now opens/closes settings instead of changing units. Units remain in the saved
-settings menu. The top cog/touch target is removed. Bottom hints show A with a
-refresh arrow, B with a cog, and C with a solid/dashed projection icon (cyan when
-enabled, gray off). Their bounds fit y229..239 and x38..268, outside the activity
-rectangle starting x278. Footer errors still take priority over hints. These
-reversible UI changes were inspected in source; no additional fixture tests were
-added. Firmware build and physical icon/button validation remain pending.
+Test primary unavailable => backup connection, priority changes, all networks
+unavailable => recovery hotspot, failed/canceled hotspot preserving the list,
+successful promotion, reconnect/IP changes and portal restart. Test busy HTTPS
+validation and sustained concurrent portal/polling memory use. Verify Graph
+focus at light/dense treatment loads, both units, threshold labels, forecasts,
+stale warning, metric fonts and green refresh icon. Check actual audio/mute and
+low reminder timing, stale data/recovery, USB/battery/Wi-Fi and partial redraws.

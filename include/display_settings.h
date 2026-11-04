@@ -1,4 +1,5 @@
 #pragma once
+// Compiled timezone default; the LAN portal can save a runtime override.
 namespace displaycfg {
 // America/New_York: Eastern time with automatic US daylight-saving rules.
 // Change to "UTC0" for UTC or another POSIX TZ string as needed.

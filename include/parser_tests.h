@@ -8,6 +8,7 @@
 #include "smb_labels.h"
 #include "graph_scale.h"
 #include "quick_settings.h"
+#include "runtime_settings.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -322,6 +323,72 @@ inline int runParserTests() {
     check(!quicksettings::validCredentials(credentials),"Corrupt unterminated saved Wi-Fi credentials are rejected");
     strlcpy(credentials.ssid,"bad\nnetwork",sizeof(credentials.ssid));
     check(!quicksettings::validCredentials(credentials),"Wi-Fi setup rejects control characters in credentials");
+  }
+  {
+    runtimecfg::Settings base,next;
+    strlcpy(base.url,"https://nightscout.example.com",sizeof(base.url));strlcpy(base.token,"fixture-subject-token",sizeof(base.token));
+    strlcpy(base.timezone,"UTC0",sizeof(base.timezone));strlcpy(base.ntp1,"pool.ntp.org",sizeof(base.ntp1));strlcpy(base.ntp2,"time.cloudflare.com",sizeof(base.ntp2));
+    quicksettings::Credentials wifi;strlcpy(wifi.ssid,"Primary",sizeof(wifi.ssid));strlcpy(wifi.password,"fixture-password",sizeof(wifi.password));
+    runtimecfg::promoteWifi(base,wifi);
+    check(runtimecfg::valid(base),"Runtime profile accepts a bounded default configuration");
+    next=base;next.url[0]=next.token[0]=0;
+    check(runtimecfg::valid(next),"Unconfigured Nightscout does not block Wi-Fi recovery or menu settings");
+    next=base;next.magic=0;check(!runtimecfg::valid(next),"Stored profile version mismatch is rejected");
+    next=base;memset(next.token,'x',sizeof(next.token));check(!runtimecfg::valid(next),"Unterminated stored secrets are rejected");
+    check(!runtimecfg::https("http://example.com") && !runtimecfg::https("https://user@example.com") && !runtimecfg::https("https://example.com?token=x") && runtimecfg::https("https://example.com/prefix"),
+      "Runtime Nightscout URL keeps HTTPS origin and optional path restrictions");
+    deserializeJson(doc,R"({"token":"","hours":12,"poll":90})");
+    check(runtimecfg::patch(doc.as<JsonVariantConst>(),base,next) && !strcmp(next.token,base.token) && next.hours==12 && next.poll==90,
+      "Blank token preserves saved secret while nonsecret fields change");
+    deserializeJson(doc,R"({"url":"https://another.example.com","token":""})");
+    check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Changing server cannot silently forward the previous saved token");
+    deserializeJson(doc,R"({"url":"https://another.example.com","token":"new-server-token"})");
+    check(runtimecfg::patch(doc.as<JsonVariantConst>(),base,next) && !strcmp(next.token,"new-server-token"),"Changing server accepts an explicitly entered replacement token");
+    deserializeJson(doc,R"({"poll":true})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Boolean cannot become a polling interval");
+    deserializeJson(doc,R"({"poll":29})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Runtime polling minimum is enforced");
+    deserializeJson(doc,R"({"hours":2})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Runtime history supports only menu timeframes");
+    deserializeJson(doc,R"({"low":150,"high":100})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Alert thresholds must remain ordered");
+    deserializeJson(doc,R"({"wifi":[{"ssid":"Primary","password":""}]})");
+    check(runtimecfg::patch(doc.as<JsonVariantConst>(),base,next) && !strcmp(next.wifi[0].password,base.wifi[0].password),"Existing Wi-Fi password is preserved when omitted or blank");
+    deserializeJson(doc,R"({"wifi":[{"ssid":"Unknown","password":""}]})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"New open Wi-Fi must be explicitly selected");
+    deserializeJson(doc,R"({"wifi":[{"ssid":"Guest","open":true}]})");
+    check(runtimecfg::patch(doc.as<JsonVariantConst>(),base,next) && !next.wifi[0].password[0],"Explicit open network is supported without revealing another password");
+    deserializeJson(doc,R"({"wifi":[{"ssid":"Guest","open":true,"password":"unexpected"}]})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Conflicting open-network password is rejected");
+    deserializeJson(doc,R"({"wifi":[{"ssid":"Primary"},{"ssid":"Primary"}]})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Duplicate saved Wi-Fi names cannot hide fallback entries");
+    deserializeJson(doc,R"({"wifi":[]})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Portal cannot accidentally erase all saved networks");
+    deserializeJson(doc,R"({"wifi":[{"ssid":"Phone","password":"fixture-backup"},{"ssid":"Primary"}]})");
+    check(runtimecfg::patch(doc.as<JsonVariantConst>(),base,next) && next.wifiCount==2 && !strcmp(next.wifi[0].ssid,"Phone") && !strcmp(next.wifi[1].password,base.wifi[0].password),
+      "Network priority changes preserve each network's own secret");
+    bool changed=runtimecfg::connectionChanged(base,next);next=base;strlcpy(next.token,"replacement-subject",sizeof(next.token));
+    check(!changed && runtimecfg::connectionChanged(base,next),"Only Nightscout identity changes invalidate cached connection data");
+    doc.clear();runtimecfg::publicJson(doc.to<JsonObject>(),base,7);
+    check(!doc.containsKey("token") && doc["tokenSet"].as<bool>() && !doc["wifi"][0].containsKey("password") && doc["wifi"][0]["passwordSet"].as<bool>(),
+      "Public settings response omits all token and Wi-Fi password values");
+    next=base;for(unsigned i=1;i<5;++i){snprintf(wifi.ssid,sizeof(wifi.ssid),"Network%u",i);runtimecfg::promoteWifi(next,wifi);}
+    strlcpy(wifi.ssid,"Newest",sizeof(wifi.ssid));runtimecfg::promoteWifi(next,wifi);
+    check(next.wifiCount==5 && !strcmp(next.wifi[0].ssid,"Newest") && runtimecfg::valid(next),"Recovery hotspot promotes a tested network while bounding backups to five");
+    runtimecfg::promoteWifi(next,wifi);check(next.wifiCount==5,"Promoting an existing network never creates duplicates");
+    deserializeJson(doc,R"({"v3":"true"})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"String booleans cannot change API mode");
+    deserializeJson(doc,R"({"brightness":256})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Display brightness is bounded to device range");
+    deserializeJson(doc,R"({"sgvStale":0})");check(!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Zero freshness limits are rejected");
+    deserializeJson(doc,R"({"token":"abc\u0000tail"})");bool rejectedTokenNul=!runtimecfg::patch(doc.as<JsonVariantConst>(),base,next);
+    deserializeJson(doc,R"({"wifi":[{"ssid":"Primary","password":"password\u0000tail"}]})");
+    check(rejectedTokenNul && !runtimecfg::patch(doc.as<JsonVariantConst>(),base,next),"Embedded NUL cannot truncate portal tokens or Wi-Fi passwords");
+    check(!strcmp(base.token,"fixture-subject-token") && base.hours==3,"Rejected or successful patch parsing never mutates the active source profile");
+  }
+  {
+    runtimecfg::Access access;
+    check(!access.authorized(true,0),"LAN portal starts without an authenticated session");
+    for(unsigned i=0;i<5;++i)access.failed(100);
+    check(access.limited(100) && access.limited(60099) && !access.limited(60100),"Five incorrect portal codes enforce a one-minute cooldown");
+    access.login(1000);check(!access.authorized(false,1001) && access.authorized(true,1002),"Only a matching session cookie authorizes portal access");
+    check(access.authorized(true,800000) && access.authorized(true,1500000),"Active authenticated requests renew the inactivity timer");
+    check(!access.authorized(true,2400000),"Idle portal sessions expire at fifteen minutes");
+    access.login(0xfffffff0u);check(access.authorized(true,20),"Portal session timers handle monotonic counter wrap");
+    access.clear();check(!access.authorized(true,21),"Disabling or locking the portal revokes its session");
+    alerts::State custom;
+    check(custom.poll(75,true,0,80,190)==alerts::Event::Low && custom.poll(185,true,1,80,190)==alerts::Event::None,
+      "Portal alert thresholds affect actual glucose alerts consistently");
   }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;

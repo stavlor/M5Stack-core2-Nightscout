@@ -1,146 +1,79 @@
-# Display and controls
+# Graph focus display and controls
 
-Current behavior, 2026-11-03.
+Current layout: 2026-11-04, 320×240 landscape.
 
 ## Layout
 
-- Large glucose value with filled graphical up/down/flat/diagonal/double arrows;
-  unknown or uncomputable trends show `?`. SGV is mg/dL internally; mmol/L uses
-  a conversion factor of 18.0182.
-- Upper-right HH:MM:SS clock, plus speaker, power and Wi-Fi indicators.
-- Gray glucose `BG` age and blue AAPS calculation `APS` age side by side above forecasts.
-  There is no separate Suggested/status-age row.
-- History and optional future pane, with treatment markers near the plot bottom.
-- IOB/COB, then reported basal and right-aligned `Mode`. Long mode text is shortened.
-- Footer A/B/C labels or prioritized error text, with data activity at the right.
+The header retains FreeSans Bold 18pt glucose (25-pixel digits, baseline y43),
+a filled trend arrow, units, speaker/power/Wi-Fi and HH:MM:SS clock. BG age is
+gray when fresh and APS age blue; missing/stale ages are amber. Missing ages show
+--. The upper-right header shows No recent loop when AAPS is missing/stale.
 
-Glucose uses FreeSans Bold 18pt at native size, with 25-pixel digit height
-and a baseline at y=43. IOB/COB use native Font2 (16-pixel line height) in
-fixed columns: IOB at x5, value right edge x124, U at x132; COB at x165,
-value right edge x291, g at x299. Numeric precision remains two decimals
-for IOB and whole grams for COB. Other text retains Font0. Plot bounds are y=72..152, time labels 184, IOB/COB 194,
-basal/mode 216 and footer 231 on the 320x240 landscape display.
+One compact legend row at y52 combines C g, SMB U, Bol U and only the available
+forecast curves. Dividers frame it at y49/60. Plot starts at y62 and normally ends
+at y162: 101 pixels high, about 25% taller than the previous 81-pixel graph.
+If measured SMB/manual-bolus labels need a second insulin row, it ends at y152:
+91 pixels high. Carb and insulin rows remain separate; individual markers stay.
+
+Treatment amounts sit below the plot: carbs at bottom+2, insulin at bottom+13,
+with bottom+24 only when needed. Time labels remain at y184, divider y192.
+IOB/COB values use FreeSans Bold 12pt, right-aligned at x124/x291, baseline y211;
+small gray labels/units sit at y201. Basal and right-aligned Mode remain at y216.
 
 ## Controls
 
 | Control | Action |
 | --- | --- |
-| A, lower left, circular-arrow icon | Request refresh; Back while settings are open |
-| B, center, cog icon | Open/close [quick settings](SETTINGS.md); units are changed there |
-| C, lower right, projection-graph icon | Toggle forecasts; cyan enabled, gray disabled; saved across reboot |
-| Speaker icon left of power | Toggle all audible alerts; saved across reboot |
+| A, green circular arrow | Refresh; Back in settings |
+| B, cog | Open/close settings; units are configured there |
+| C, solid/dashed projection icon | Toggle forecasts; cyan enabled, gray off |
+| Speaker, x174..199 y0..27 | Toggle all audible alerts; saved across restart |
 
-Speaker cyan/blue means enabled; a red slash means muted. Its touch area is
-x174..199, y0..27. A press toggles once; holding does not repeatedly toggle.
-Muting stops the current tone. Re-enabling evaluates the current fresh reading.
-See [ALERTS.md](ALERTS.md).
+Footer icons occupy y229..239, outside the x278..319 activity rectangle. Errors
+and treatment-limit warnings temporarily replace hints; physical controls remain
+available. C is inactive inside settings. See SETTINGS.md for the LAN portal and
+Wi-Fi submenu. The clock keeps seconds; there is no top-bar cog.
 
-## Clock and small indicators
+## Graph scale and color
 
-The timezone is in `include/display_settings.h`: default
-`EST5EDT,M3.2.0/2,M11.1.0/2` for Eastern time with automatic US DST. Use `UTC0`
-for UTC or another POSIX rule as needed. API timestamps remain UTC epoch values.
-Clock dashes indicate that the UI has not received a valid time anchor yet.
+The axis follows SGVs inside the selected history window. Padding is at least
+10 mg/dL or 10% of the observed range, with a minimum 60 mg/dL span. Bounds round
+outward to tens and stay nonnegative. Empty history uses 70..180. There is no
+fixed 40/250 baseline. mg/dL bounds show whole numbers; mmol/L shows one decimal.
+Labels at 70/180 transitions appear when space permits without crowding bounds.
 
-**Power:** approximate battery percentage when on battery; green USB/EXT when
-that external input supplies power; plus sign while charging. Battery at or
-below 20% is red without external power. Unknown input shows `?`; unavailable
-battery level shows `--%` when on battery. USB wall adapters and computer ports
-cannot be distinguished.
+Background: dark red below 70, green from 70 through 180, orange above 180 through
+249 and red above 249. Only visible portions are shaded. Historical glucose is a
+solid per-value colored trace; missing-data gaps remain. The latest point is
+slightly larger. Fresh trace colors use the configured low/high thresholds;
+stale history is gray. Empty history shows No glucose in this window.
 
-Core2 v1.3 uses AXP192 present/usable flags plus at least 4 V and more than 1 mA
-incoming current. Charging alone is not used to classify external supply; a full
-battery can still show USB. Failed status reads show unknown. The firmware only
-reads PMIC status/ADC registers and does not alter routing/charging configuration.
-Power is sampled once per second.
+Forecasts are dashed and do not expand the SGV-derived scale. Off-scale portions
+are clipped, with CLIP in the header and an asterisk beside the forecast legend.
+The green refresh shortcut remains visible unless a higher-priority data error
+or treatment-limit warning occupies the footer. Forecasts disappear if either
+SGV or the calculation is stale.
 
-**Wi-Fi:** 1-4 bars, green for stronger and yellow/orange for weaker signal.
-Disconnected is a red cross; connected with unavailable RSSI shows gray bars.
-It is sampled once per second. Wi-Fi association does not prove Nightscout access.
+## Clock, status and redraw
 
-## Activity indicator
+Timezone defaults to Eastern with US DST and can be changed in the portal.
+API timestamps remain UTC. Clock dashes indicate no valid UI time anchor yet.
+Power shows approximate battery percentage or USB/EXT; a plus indicates charging.
+Battery <=20% is red without external supply. AXP192 input flags, >=4 V and
+>1 mA incoming current distinguish usable external power, including a full battery.
+Failed readings show unknown; a USB wall adapter cannot be distinguished from a PC.
+Wi-Fi bars reflect RSSI; a red cross means disconnected. Both sample once a second.
 
-| Indicator, lower right | Meaning |
-| --- | --- |
-| Cyan GET + spinner | Network polling cycle, including connection/fetch work |
-| Green UPD + check | Completed successful snapshot applied; brief pulse |
-| Orange ERR | Completed cycle reported an endpoint error; brief pulse |
-| Dim dot | Idle between polls |
+Activity: cyan GET/spinner while fetching, brief green UPD after a successful
+snapshot, brief orange ERR after errors, dim dot while idle. It updates its own
+42×11 rectangle. Data freshness depends on timestamps, not HTTP success.
 
-Only its 42x11 rectangle animates every 150 ms while busy. Completion pulses last
-500 ms. A successful HTTP cycle does not itself establish freshness; the values'
-own ages still apply. Long footer text is ellipsized to avoid overlap.
+The dashboard redraws only for changed content, visible freshness/expiry/window
+changes or settings. Clock, ages and small indicators update independently.
+The graph does not continuously scroll between full redraws. Runtime profile
+changes force a redraw; changed Nightscout identity clears old cached data.
 
-## Refresh, colors and status
-
-The full dashboard redraws when data/error content changes, a visible freshness
-or expiry state changes, a history item enters/leaves the window, or B/C changes
-its setting. Identical polls do not repaint the graph. Clock seconds, age text,
-power, Wi-Fi, speaker and activity update independent small rectangles. The graph
-does not continuously scroll between full redraws.
-
-The compact legend shows Carbs g, SMB U and Bolus U. The header is subdued
-and gridlines are dim gray so the solid glucose trace and dashed forecasts stand out.
-
-Glucose points and interpolated segments are green in range, orange above and
-red below display thresholds. Stale history is gray. Default freshness is ten
-minutes; old SGV shows STALE with advancing age. Missing values show `--` and
-unknown ages/mode are explicit. Valid empty results clear data; errors retain it.
-
-IOB/COB and basal use calculation/pump timestamps, not upload freshness. Temp
-basal requires a valid absolute rate and positive remaining duration; otherwise
-reported base basal is shown. A temp expires at upload time plus reported
-remaining minutes and becomes unknown until a new report. Suggested rates and
-extended boluses are not added to basal. This is an uploaded snapshot, not proof
-of current delivery.
-
-Mode is the pump's uploaded `status.status` text. It is not inferred from an
-OpenAPS suggestion; `normal` does not establish closed-loop mode. Stale/missing
-pump mode shows Unknown/stale.
-
-The LCD stays on. There is no Wi-Fi alarm or persistent health-data cache.
-Treatments/forecasts are described in [OVERLAYS.md](OVERLAYS.md); glucose chirps
-in [ALERTS.md](ALERTS.md). Verification status is in [VERIFICATION.md](VERIFICATION.md).
-
-## Additional clarity refinements
-
-The header has fixed positions for the title, units and STALE warning, leaving
-space for the top-right icons. Missing ages show --. BG and APS ages turn amber
-when missing/stale; fresh APS remains blue. Changes at the freshness boundary
-refresh their small rectangle even when the minute text has not changed.
-
-The treatment legend includes the matching triangle/dot shapes. Y-axis bounds
-are right-aligned and retain one decimal in mmol/L. The latest actual glucose
-point is slightly larger than earlier points. Empty history shows an explicit
-No glucose in this window message. Normal button hints are gray; footer errors
-and treatment-limit warnings remain amber. IOB/COB labels and units are gray,
-with values in white. Forecast curves remain dashed and historical glucose solid;
-missing-data gaps and per-value glucose coloring are preserved.
-
-## Automatic graph scale and target band
-
-The Y-axis follows actual SGVs within the visible history window (three hours by
-default). Padding is the greater of 10 mg/dL or 10% of the observed range, with
-a minimum 60 mg/dL span, rounded outward to 10 mg/dL increments and a nonnegative
-lower bound. There is no fixed 40/250 baseline. Empty history uses 70..180.
-All calculations use mg/dL; axis labels convert to mmol/L when selected.
-
-Subtle background bands follow the visible scale: dark red below 70 mg/dL,
-dark green from 70 through 180, dark orange above 180 through 249, and dark red
-above 249. Bands are clipped to the visible scale and extend through the forecast
-pane. The classification uses mg/dL even when labels display mmol/L. Forecasts do not expand the SGV-derived scale; off-scale curves
-are clipped and the legend shows FCAST CLIPPED. Treatment markers and their label
-rows stay anchored at the graph bottom as the scale changes. Alert thresholds
-and glucose trace colors retain their existing settings.
-
-Thin muted-gray dividers frame the two upper legend rows (y49 and y70) and
-the lower treatment/time label block (y153 and y192). They occupy the existing
-spacing; graph bounds, text positions and metric rows are unchanged.
-
-The top-bar cog has moved to the bottom-center B shortcut. Footer icons are drawn
-with native lines/triangles/circles, avoiding font-symbol dependencies. The C icon
-shows a solid history line and dashed projection. Warning/error text temporarily
-replaces shortcut hints as before; button actions remain available. Activity stays
-at the lower right in its separate rectangle. There is no Units shortcut on B;
-open settings to change units. Button B also closes settings (and cancels active
-Wi-Fi setup), as do Back and button A.
+IOB/COB/basal age from their calculation/pump timestamps, not upload time. Temp
+basal expires from reported remaining duration. Suggested rates/extended boluses
+are not added to basal. Mode is uploaded pump status, not an inference from an
+OpenAPS suggestion. Missing/stale values and mode remain explicit.

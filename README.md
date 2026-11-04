@@ -1,161 +1,141 @@
 # Nightscout / AAPS dashboard for M5Stack Core2 v1.3
 
-Current documentation: 2026-11-03.
+Current source: 2026-11-04 — Graph focus and LAN configuration candidate.
 
-A read-only HTTPS dashboard using **Nightscout API v3 by default**. It shows large
-glucose values and graphical trend arrows, history, carb/SMB/bolus markers,
-OpenAPS forecasts, IOB/COB, reported basal and mode, local time, power, Wi-Fi,
-sync activity, and optional glucose and missing-update sounds. It works on USB or the Core2 battery;
-the LCD stays on. It does not send dosing commands or write Nightscout data.
-This is a secondary display; use the CGM/AAPS for treatment decisions and primary alerts.
+Read-only, validated HTTPS Nightscout v3 dashboard with glucose/trend/history,
+OpenAPS forecasts, treatment markers, IOB/COB, basal/pump state, clock, power,
+Wi-Fi and optional glucose/missing-update sounds. Graph focus uses a compact
+legend and adaptive treatment rows for a 101-pixel graph normally, 91 when crowded.
+B opens settings. A has a green refresh icon; C toggles forecasts.
+
+The optional LAN configuration service runs on port 3000, defaults to off on
+every restart and is enabled from the device. It configures Nightscout URL/token,
+uploader/API, five ordered Wi-Fi networks and display/alert/time settings without
+recompiling. Existing saved settings migrate. It never writes Nightscout data.
+This is a secondary display; use CGM/AAPS for primary alerts and treatment decisions.
+
+## Start here
+
+1. Extract the release ZIP. Install Python 3.9+ and PlatformIO Core or PlatformIO
+   IDE for VS Code. Use a USB data cable and the CH9102 driver if needed.
+2. Run Flash-Core2.cmd (Windows) or `python3 flash.py --init-config`. The helper
+   creates include/config.h from the example only if missing and never overwrites it.
+3. Either edit Wi-Fi/HTTPS URL/read-only subject token in config.h before building,
+   or build with the examples and provision from the device afterward.
+4. Run Flash-Core2.cmd again, or `python3 flash.py --port /dev/ttyUSB0` using your
+   actual port. PlatformIO downloads pinned dependencies/compiler on first build.
+5. To provision without compiled credentials: B > Wi-Fi setup > Temporary setup
+   hotspot. Join the displayed network and open http://192.168.4.1 to connect Wi-Fi.
+   Then B > LAN portal: On, open the displayed LAN address on port 3000 and enter
+   the device code. Save Nightscout URL/token there. Turn the portal off when done.
+
+Existing private config.h and saved preferences should be kept during updates.
+A saved runtime profile overrides compiled defaults, including Wi-Fi and token.
+Ordinary reflashing preserves it. Changing defaults in config.h will not replace
+an already saved profile; edit it in the portal or erase flash and re-upload.
+
+See [RELEASE.md](RELEASE.md) for portable flashing options and checksums.
+The workstation-specific helper in the surrounding outputs directory remains
+available locally: it runs the current 140 C++ host fixtures before building and
+uploading to COM3. The portable helper runs normal PlatformIO builds; it does not
+automatically run desktop C++ fixtures.
 
 ## Documentation
 
 | File | Contents |
 | --- | --- |
-| [V3.md](V3.md) | Authentication, request fields, response handling, legacy fallback |
-| [SETTINGS.md](SETTINGS.md) | Cog menu, saved settings and Wi-Fi setup |
-| [DISPLAY.md](DISPLAY.md) | Layout, buttons, touch toggle, clock and indicators |
-| [OVERLAYS.md](OVERLAYS.md) | Treatment markers, deduplication, predictions and limits |
-| [ALERTS.md](ALERTS.md) | Thresholds, repeats, mute persistence and sound settings |
-| [VERIFICATION.md](VERIFICATION.md) | Actual test/build evidence and remaining checks |
+| [SETTINGS.md](SETTINGS.md) | LAN portal, access code, saved networks, fallback and hotspot recovery |
+| [DISPLAY.md](DISPLAY.md) | Graph focus layout, fonts, controls, scaling and status |
+| [ALERTS.md](ALERTS.md) | Glucose/stale sounds, threshold settings and mute |
+| [OVERLAYS.md](OVERLAYS.md) | Treatment labels/deduplication and forecasts |
+| [V3.md](V3.md) | Nightscout requests, JWTs, bounds and explicit legacy mode |
+| [VERIFICATION.md](VERIFICATION.md) | Passing checks, compiler limitation and remaining hardware checks |
 
-## Portable build and flash tool
+## Nightscout and HTTPS
 
-See [RELEASE.md](RELEASE.md) for the release bundle quick start. Flash-Core2.cmd
-on Windows and flash.py on any supported Python system build/upload using your
-local PlatformIO installation. The first run creates include/config.h only if
-missing, then stops for editing. Existing private config is preserved. The helper
-supports explicit ports, build-only mode, port listing and serial monitoring.
-It runs a normal PlatformIO build; host fixture tests are a separate step.
+Use the canonical HTTPS origin and optional path prefix, without trailing slash,
+query, embedded credentials or token parameter. Use a dedicated read-only subject
+access token, not API_SECRET or a SHA1 hash. It needs entries, device-status and
+treatments read permissions. AAPS uses its own upload credential. Enable glucose,
+treatment and device-status uploads there. Set the exact AAPS device filter when
+multiple uploaders share a site; only two newest status documents are searched.
 
-## Fresh setup from the ZIP
+V3 is the default. It exchanges the subject token for a RAM-only JWT over HTTPS.
+The ISRG Root X1 / GTS Root R4 bundle validates chain, hostname and time. Redirects,
+insecure TLS and plain HTTP Nightscout URLs are rejected. A different server CA
+requires updating certs/root-ca.pem from a trusted source, then rebuilding.
+NTP must work for TLS; defaults use pool.ntp.org/time.cloudflare.com. No profile
+or prediction calculations run locally. Values describe uploaded snapshots.
 
-1. Install VS Code with PlatformIO IDE, or PlatformIO Core.
-2. Extract the ZIP and open the folder containing `platformio.ini`.
-3. Copy `include/config.example.h` to `include/config.h` only for a new installation.
-4. Enter 2.4 GHz Wi-Fi credentials, the canonical HTTPS URL and a dedicated
-   read-only **subject access token**. Use the token as issued, not API_SECRET
-   or a SHA1 hash. The URL may have a path prefix but no trailing slash, query,
-   embedded credentials or `?token=` parameter.
-5. Set `AAPS_DEVICE` to the exact uploaded `device` string when several uploaders
-   share the site. Without it, v3 searches for OpenAPS data among only the two
-   newest returned device-status records.
-6. Check the included CA roots against your site's chain. NTP must work before HTTPS.
-7. Connect a USB **data** cable and build/upload **core2**. Install M5Stack's
-   CH9102 driver if Windows does not show a serial port.
+## Configuration and limits
+
+Compiled defaults are in include/config.h (copy from config.example.h),
+include/ns_settings.h, include/display_settings.h and include/alerts.h. Runtime
+profile settings are managed by the portal and device menu; see SETTINGS.md for
+limits, migration and storage behavior. Portal enablement itself is not saved.
+
+History supports 1/3/6/12 hours; polls default to 60 seconds and allow 30–900.
+Freshness defaults to ten minutes. Glucose bodies are bounded at 192 KiB, data
+JSON at 64 KiB/nesting 16. Entries retain up to 288 points, treatments 128 from
+up to 200 fetched records. At the entry cap an SGV history limited warning may
+mean older data is missing. Failed/malformed reads retain cached values while
+aging; successful empty collections clear them. Nightscout identity changes
+clear cached data so another site's values cannot remain on screen.
+
+Health data stays in RAM; settings and saved credentials live in NVS. Diagnostics
+print status/counts/sizes, not credentials or response bodies. The LAN portal
+never returns saved token/password values; blank secret fields preserve them for
+unchanged destinations. A changed Nightscout URL requires its token explicitly.
+The portal uses HTTP on a trusted LAN, not HTTPS. Do not expose it to the Internet.
+
+## Build and tests
 
 From the project folder:
 
 ```text
 pio run -e core2
-pio run -e core2 -t upload
+pio run -e core2 -t upload --upload-port COM3
 pio device monitor -b 115200
 ```
 
-Append `--upload-port COM3` to upload when needed, using your actual port. Reduce
-`upload_speed` to 115200 if flashing is unreliable. `parser-tests` is fixture
-firmware, not the dashboard; reflash `core2` afterward. Portable PlatformIO builds
-do not automatically run the desktop host suite.
-
-The ZIP contains source/example settings, not a configured binary. `config.h`
-is excluded from the archive and Git ignore rules protect it from routine
-commits. A configured binary contains credentials in flash; do not publish it.
-
-## Configuration files
-
-| File | Settings |
-| --- | --- |
-| `include/config.h` | Wi-Fi, URL/token, AAPS device, units, history hours, polling, stale limits, display thresholds, brightness and NTP |
-| `include/ns_settings.h` | `USE_V3=true`; false selects explicit v1 fallback |
-| `include/display_settings.h` | POSIX timezone; Eastern with automatic US DST |
-| `include/alerts.h` | Sound thresholds, low repeat interval, volume, duration and frequency |
-
-Polling defaults to 60 seconds; failures back off from 30 to 240 seconds. A
-requests a refresh. History defaults to three hours; the cog menu saves a 1/3/6/12-hour selection.
-SGV/AAPS values become stale after ten minutes by default. Display and sound
-threshold settings are separate; both default to 70/180 mg/dL.
-
-## Nightscout and AAPS
-
-Use a dedicated subject with `readable` or equivalent `api:entries:read`,
-`api:devicestatus:read` and `api:treatments:read` rights. The firmware only issues
-GETs but cannot prove a supplied token lacks write permission; scope it in
-Nightscout. V3 exchanges it for a temporary JWT and uses Bearer authorization.
-See [V3.md](V3.md) for details and the explicit legacy fallback.
-
-Enable AAPS glucose, treatment and device-status uploads. AAPS uses its own upload
-credential; the display uses a separate read-only credential. Glucose-only uploads
-cannot provide IOB/COB, pump state or predictions. The display does not download
-profiles or calculate insulin, carbohydrate absorption or predictions locally.
-
-## TLS, limits and errors
-
-`certs/root-ca.pem` contains ISRG Root X1 and GTS Root R4. Chain, hostname and
-validity checks remain enabled; HTTP and redirects are rejected. The approved
-live v3 probe succeeded with this bundle. For another CA, obtain its root from a
-trusted official source, verify its fingerprint, update the PEM, rebuild and
-flash. The server must send intermediates. Routine leaf renewal under the same
-root usually needs no firmware change.
-
-NTP defaults to `pool.ntp.org` and `time.cloudflare.com` (UDP/123). Use reachable
-local servers if needed. A clock before 2026-01-01 blocks API access. Ages continue
-with a monotonic timer after an initial anchor, including during network outages.
-Connect/TLS-handshake/read timeouts are 10/12/20 seconds. HTTP chunks are decoded
-before JSON parsing. Bodies are capped at 192 KiB in fixed buffers, preferring
-PSRAM; data JSON uses 64 KiB and nesting limit 16. JWT exchange has smaller bounds.
-
-Malformed/oversized responses retain prior data while it ages; valid empty
-collections clear corresponding data. Metric strings/nulls/booleans/nonfinite
-values are rejected. SGV must be 20-600 mg/dL; records over two minutes in the
-future are rejected. Treatment markers exclude any future event. Health data
-stays in RAM; display preferences and saved Wi-Fi credentials persist in NVS.
-
-The footer prioritizes SGV errors, then AAPS, then treatments. Long errors are
-ellipsized beside the activity indicator. Serial diagnostics contain codes and
-sizes, not credentials or response bodies. Check:
-
-- **Auth / HTTP 401 or 403:** token rights, v3 availability and proxy rules. Both
-  auth and data requests explicitly use `ESP32HTTPClient`, matching the successful probe.
-- **TLS verify / Auth TLS/network:** final hostname, NTP, CA and intermediate chain.
-- **Body/memory error:** note the code/size, shorten history if necessary.
-- **Missing AAPS values:** upload fields/timestamps and exact `AAPS_DEVICE` filter.
-- **Treatments limited:** bounded history may omit older events; reduce history hours.
-
-Networking runs separately from the UI. A very slow peer can extend a response
-by sending bytes within each read timeout, but the UI remains responsive.
-Non-ASCII pump mode text may not render correctly. Wi-Fi setup starts a temporary
-protected hotspot and captive page only when selected in quick settings.
-
-## Tests and references
-
-See [VERIFICATION.md](VERIFICATION.md) for actual evidence and outstanding checks.
-Core2 fixture firmware has no Wi-Fi, audible tones or saved-preference writes:
+Use your actual upload port. If flashing is unreliable reduce upload_speed to
+115200. Fixture firmware is separate from the dashboard:
 
 ```text
 pio run -e parser-tests -t upload
 pio device monitor -b 115200
 ```
 
-Desktop tests after obtaining ArduinoJson through a normal PlatformIO build:
+Fixture firmware runs on its own 49 KiB task, with no Wi-Fi, tones or preference
+writes. Reflash core2 afterward. Desktop host fixtures after fetching ArduinoJson:
 
 ```text
 g++ -std=c++11 -Itest/compat -Iinclude -I.pio/libdeps/core2/ArduinoJson/src test/host.cpp -o parser-tests
 ```
 
-Run the executable (`parser-tests.exe` on Windows). The shim replaces Arduino
-string-copy/serial facilities, not the production parsing/state models.
+Run that executable. Portable flashing-tool and embedded portal-controller checks:
 
-- [Core2 v1.3 hardware](https://docs.m5stack.com/en/core/Core2_v1.3)
-- [M5Unified](https://github.com/m5stack/M5Unified) and [M5GFX](https://github.com/m5stack/M5GFX)
-- [Nightscout v3 specification](https://github.com/nightscout/cgm-remote-monitor/blob/master/lib/api3/swagger.yaml)
-- [ArduinoJson v6](https://arduinojson.org/v6/)
+```text
+python -m unittest discover -s test -p test_flash_tool.py -v
+node test/test_portal_frontend.cjs
+```
+
+The current 140 C++ checks include 36 new runtime-settings/access cases. The prior
+104-check host log passed; the new cases and firmware compile remain pending
+because compiler executables cannot launch in the authoring session. Python
+flashing-tool and Node portal-controller checks run independently of a device.
+See VERIFICATION.md for exact evidence; this candidate is not a precompiled image.
+
+## Troubleshooting
+
+- Wi-Fi offline: reconnect saved networks or use the recovery hotspot.
+- Auth/401/403: check subject token, endpoint rights, API mode and proxy rules.
+- TLS/time failure: check NTP, canonical hostname, CA/intermediate chain.
+- Missing AAPS: check uploader filter, fields and calculation timestamps.
+- Limited history/body error: reduce history hours and note the serial size/code.
+- Portal unavailable: enable it on the device, use its current IP with :3000 and
+  the same LAN. Use the device's new code if the service or Wi-Fi restarted.
 
 Project source is MIT licensed; dependencies retain their own licenses.
 
-## On-device configuration
-
-Button B (the bottom-center cog) opens quick settings. History, units, forecasts and
-sound persist across restarts. Wi-Fi setup starts a temporary protected hotspot
-with a phone-accessible form, tests new credentials and saves them only after
-successful connection. See [SETTINGS.md](SETTINGS.md) for setup and limits.
+Node 18+ is optional and is only needed for the portal browser-controller tests.

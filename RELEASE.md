@@ -1,31 +1,26 @@
-# Source release: 2026-11-03
+# Source candidate: Graph focus / LAN portal, 2026-11-04
 
-This bundle contains the complete PlatformIO project, a portable build/flash
-helper, configuration example, TLS roots, tests, documentation and MIT license.
-It does not contain configured firmware binaries, private config.h, compiler
-caches or serial logs. Build locally with your own read-only credentials.
+This bundle includes full PlatformIO source, portable build/flash helpers,
+configuration example, TLS roots, regression fixtures, documentation and MIT
+license. No private config.h, configured binary, compiler cache or log is included.
 
 ## Requirements
 
-- M5Stack Core2 v1.3 and a USB data cable.
-- Python 3.9 or newer (Python launcher on Windows recommended).
-- PlatformIO IDE for VS Code, or PlatformIO Core installed with
-  `python -m pip install platformio` (use python3 if appropriate).
-- Working Internet for PlatformIO's first build to fetch the pinned platform,
-  libraries and compiler. The helper is not an offline standalone flasher.
-- CH9102 serial driver if the device does not appear on Windows.
+M5Stack Core2 v1.3, USB data cable, Python 3.9+, and PlatformIO IDE for VS Code or
+PlatformIO Core (`python -m pip install platformio`). The first build downloads
+the pinned platform/libraries/compiler. This is not an offline standalone flasher
+or an M5Burner image. Install M5Stack's CH9102 driver if no serial port appears.
 
 ## Windows
 
-1. Extract the entire ZIP; keep flash.py beside platformio.ini.
-2. Double-click Flash-Core2.cmd. On first use it creates include/config.h and
-   stops so you can edit it. It never overwrites an existing config.h.
-3. Edit that file with your 2.4 GHz Wi-Fi, canonical HTTPS Nightscout URL and
-   dedicated read-only subject access token. See README.md for URL/token details.
-4. Connect the Core2, close other serial applications and run Flash-Core2.cmd
-   again. PlatformIO builds locally and autodetects the upload port.
+Extract the entire archive and keep flash.py beside platformio.ini. Double-click
+Flash-Core2.cmd. First use creates include/config.h only if missing and stops
+for editing; existing private config is preserved. Either fill your Wi-Fi and
+HTTPS Nightscout URL/read-only token there, or leave example values and provision
+through the device's hotspot followed by its LAN portal (README.md/SETTINGS.md).
+Run the helper again to build/upload with automatic port detection.
 
-For an explicit port or build-only operation, open a terminal in the project:
+From a terminal in the extracted project:
 
 ```text
 Flash-Core2.cmd --list-ports
@@ -34,52 +29,64 @@ Flash-Core2.cmd --build-only
 Flash-Core2.cmd --monitor --port COM3
 ```
 
-The wrapper pauses when double-clicked so messages remain visible. Passing any
-arguments disables that pause for terminal/automation use. It returns the build
-or upload exit status. The flasher does not erase all flash, preserving saved
-settings and Wi-Fi credentials. See SETTINGS.md to change Wi-Fi afterward.
+The wrapper pauses when launched without arguments. Arguments disable the pause
+for terminal/automation use. It returns the build/upload exit status. Close other
+serial applications first. Uploading normally preserves saved NVS preferences.
 
-## macOS / Linux / any Python terminal
+## Other systems / Python terminal
 
 ```text
 python3 flash.py --init-config
-```
-
-Edit include/config.h, then:
-
-```text
 python3 flash.py --list-ports
 python3 flash.py --build-only
 python3 flash.py --port /dev/ttyUSB0
 python3 flash.py --monitor --port /dev/ttyUSB0
 ```
 
-Use the port shown on your system (macOS commonly uses /dev/cu.*). Linux may
-require serial-device group membership. Omit --port to use PlatformIO detection.
-The helper searches PATH, the current Python's PlatformIO module, and the usual
-~/.platformio/penv interpreter installed by PlatformIO IDE. It does not install
-software automatically. `python flash.py --help` lists all options.
+Choose your actual port (macOS commonly /dev/cu.*); omit --port for detection.
+Linux may require serial-device group membership. The helper finds PlatformIO
+on PATH, in the current Python, or the standard ~/.platformio/penv environment
+installed by PlatformIO IDE. It does not install software automatically.
+`python flash.py --help` lists options.
 
-## Verification and limits
+## Device configuration
 
-The latest observed workstation firmware host log has 104 passed, zero failed.
-The portable helper has 14 isolated Python tests; no device is touched by them.
-The helper invokes a normal PlatformIO production build, not the desktop C++
-host suite. Fixture instructions and detailed evidence are in VERIFICATION.md.
-No new clean firmware compile or physical device test was completed as part of
-packaging because compiler executables could not launch in the authoring session.
-A local build is required before upload; this is a source release, not a verified
-precompiled image or an M5Burner package.
+B opens settings; A refresh has a green arrow; C toggles forecasts. B > Wi-Fi
+setup provides reconnect and recovery hotspot provisioning. LAN portal is off
+after each restart. Enable it on the device, open the displayed address on port
+3000 from the same LAN and enter the displayed access code. See SETTINGS.md for
+five-network fallback, full Nightscout/profile settings and access/storage details.
 
-Run the release-tool checks from the extracted project:
+A saved runtime profile takes precedence over config.h defaults. Existing saved
+settings migrate on first use. Reflashing retains them; erasing flash clears them
+and requires uploading the firmware again.
+
+## Verification status
+
+The previous observed workstation C++ log had 104 passed, zero failed. The current
+suite has 140 fixtures, including 36 new settings/access cases, but those additions
+and this firmware could not compile in the authoring session because compiler
+executables cannot launch. This source candidate includes no fresh firmware image
+and is not claimed hardware-validated. Complete the build and device checks in
+VERIFICATION.md before promoting it as a tested release.
+
+The portable helper's 14 isolated Python tests and the actual embedded portal
+controller's Node checks pass. These do not replace C++ or ESP32 tests. They can
+be run locally without connecting a device:
 
 ```text
 python -m unittest discover -s test -p test_flash_tool.py -v
+node test/test_portal_frontend.cjs
 ```
 
-SHA256SUMS.txt inside the ZIP lists every bundled source/document/tool file.
-The separate release SHA256SUMS.txt lists the ZIP and release-notes asset hashes.
+The portable helper invokes a normal PlatformIO production build. Desktop C++
+fixtures require a C++ compiler and ArduinoJson headers; on-device fixture firmware
+is provided as parser-tests. README.md gives both workflows. The original local
+workstation helper in the surrounding outputs directory runs all C++ checks first.
 
-Private configuration and configured firmware embed credentials. Keep them off
-GitHub. The source license covers this project; PlatformIO dependencies retain
-their own licenses and are fetched separately.
+SHA256SUMS.txt inside the ZIP covers every bundled source/tool/document. The
+separate release checksum asset covers the ZIP and release-notes asset. Configured
+firmware and config.h contain private credentials and must not be published.
+Dependencies retain their own licenses and are fetched separately.
+
+Node 18+ is optional and is only needed for the portal browser-controller tests.

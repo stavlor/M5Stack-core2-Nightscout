@@ -1,4 +1,6 @@
 #pragma once
+// Compiled defaults; a saved runtime profile overrides these after provisioning.
+// B > LAN portal configures URL/token, Wi-Fi and display/alert/time settings.
 namespace cfg {
 constexpr char WIFI_SSID[] = "YOUR_2_4_GHZ_WIFI";
 constexpr char WIFI_PASSWORD[] = "YOUR_WIFI_PASSWORD";

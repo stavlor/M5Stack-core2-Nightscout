@@ -9,7 +9,10 @@
 #include <DNSServer.h>
 #include <esp_system.h>
 #include "quick_settings.h"
+#include "runtime_settings.h"
+#include <freertos/semphr.h>
 #include <atomic>
+#include <new>
 #include "body_buffer.h"
 #include "model.h"
 #include "treatments.h"
@@ -38,7 +41,9 @@ struct Snapshot {
   model::Treatments treatments;
   char glucoseError[48]="Starting", statusError[48]="Starting", treatmentError[48]="Starting";
   int64_t clockAt=0, monoAt=0;
+  uint32_t connectionEpoch=0;
 };
+void resetSnapshot(Snapshot &value) {value.~Snapshot();::new(static_cast<void*>(&value)) Snapshot();}
 Snapshot ui;
 QueueHandle_t updates;
 TaskHandle_t networkTask;
@@ -50,20 +55,27 @@ bool settingsOpen=false;
 std::atomic<bool> portalRequested{false},portalCancel{false},reconnectRequested{false};
 std::atomic<int> portalState{0}; // idle, waiting, ready, testing, saved, failed, timed out, canceled
 char portalName[32]={},portalPassword[17]={};
-String stationSsid,stationPassword; // Only the network task reads/writes credentials.
 
 alerts::State glucoseAlerts;
 alerts::StaleState staleAlerts;
 bool staleSoundActive=false;
-Preferences alertPreferences;
-bool alertPreferencesReady=false;
+runtimecfg::Settings liveSettings,uiSettings,netSettings;
+SemaphoreHandle_t settingsMutex=nullptr,networkGate=nullptr;
+std::atomic<uint32_t> settingsRevision{1},connectionEpoch{1};
+uint32_t uiRevision=0,uiEpoch=1;
+std::atomic<bool> lanRequested{false},apSetupActive{false};
+struct LanStatus {int state=0;char address[48]={},code[9]={};};
+QueueHandle_t lanUpdates=nullptr;
+LanStatus lanStatus;
+bool wifiMenuOpen=false;
+char settingsMessage[64]={};
 std::atomic<bool> networkBusy{false};
 uint32_t lastAppliedAt=0;
 bool haveApplied=false;
 enum class Resource {Glucose,Status,Treatments};
 namespace layout {
-constexpr int PLOT_TOP=72, PLOT_BOTTOM=152;
-constexpr int LEGEND_Y=52, FORECAST_LEGEND_Y=62, TIME_Y=184;
+constexpr int PLOT_TOP=62;
+constexpr int LEGEND_Y=52, TIME_Y=184;
 constexpr int IOB_Y=194, BASAL_Y=216, FOOTER_Y=231;
 }
 
@@ -71,13 +83,66 @@ int64_t monotonicSeconds() { return esp_timer_get_time()/1000000; }
 int64_t displayNow() {
   return ui.clockAt ? ui.clockAt+monotonicSeconds()-ui.monoAt : 0;
 }
+void currentSettings(runtimecfg::Settings &out,uint32_t &revision,uint32_t *epoch=nullptr) {
+  xSemaphoreTake(settingsMutex,portMAX_DELAY);out=liveSettings;revision=settingsRevision.load();if(epoch)*epoch=connectionEpoch.load();xSemaphoreGive(settingsMutex);
+}
+bool storeSettings(const runtimecfg::Settings &next,uint32_t expected,char *error,size_t cap) {
+  if(!runtimecfg::valid(next)) {strlcpy(error,"Invalid settings",cap);return false;}
+  xSemaphoreTake(settingsMutex,portMAX_DELAY);
+  if(expected!=settingsRevision.load()) {xSemaphoreGive(settingsMutex);strlcpy(error,"Settings changed; reload before saving",cap);return false;}
+  Preferences saved;bool ok=false;
+  if(saved.begin("ns-runtime",false)) {ok=saved.putBytes("profile",&next,sizeof(next))==sizeof(next);saved.end();}
+  if(ok) {
+    if(runtimecfg::connectionChanged(liveSettings,next)) ++connectionEpoch;
+    liveSettings=next;++settingsRevision;
+  }
+  xSemaphoreGive(settingsMutex);
+  strlcpy(error,ok?"":"Could not save settings",cap);
+  if(ok && networkTask) xTaskNotifyGive(networkTask);
+  return ok;
+}
+void loadRuntimeSettings() {
+  runtimecfg::Settings defaults;
+  strlcpy(defaults.url,cfg::NS_URL,sizeof(defaults.url));strlcpy(defaults.token,cfg::NS_TOKEN,sizeof(defaults.token));
+  strlcpy(defaults.device,cfg::AAPS_DEVICE,sizeof(defaults.device));defaults.v3=nscfg::USE_V3;
+  strlcpy(defaults.timezone,displaycfg::TIMEZONE,sizeof(defaults.timezone));
+  strlcpy(defaults.ntp1,cfg::NTP1,sizeof(defaults.ntp1));strlcpy(defaults.ntp2,cfg::NTP2,sizeof(defaults.ntp2));
+  defaults.hours=quicksettings::restoreHours(cfg::GRAPH_HOURS,3);defaults.poll=cfg::POLL_SECONDS;
+  defaults.sgvStale=cfg::SGV_STALE_SECONDS;defaults.apsStale=cfg::AAPS_STALE_SECONDS;
+  defaults.low=cfg::LOW_MGDL;defaults.high=cfg::HIGH_MGDL;defaults.brightness=cfg::BRIGHTNESS;defaults.mmol=cfg::MMOL;defaults.volume=alerts::VOLUME;
+  if(!runtimecfg::https(defaults.url) || strlen(cfg::NS_URL)>=sizeof(defaults.url)) {defaults.url[0]=0;defaults.token[0]=0;}
+  if(strlen(cfg::NS_TOKEN)>=sizeof(defaults.token) || !strcmp(defaults.token,"YOUR_READ_ONLY_ACCESS_TOKEN"))defaults.token[0]=0;
+  defaults.poll=std::max(30u,std::min(defaults.poll,900u));
+  defaults.sgvStale=std::max(60u,std::min(defaults.sgvStale,3600u));defaults.apsStale=std::max(60u,std::min(defaults.apsStale,3600u));
+  if(defaults.low<20 || defaults.low>179)defaults.low=70;
+  if(defaults.high<=defaults.low || defaults.high>600)defaults.high=180;
+  defaults.brightness=std::min(defaults.brightness,255u);defaults.volume=std::min(defaults.volume,255u);
+  if(!defaults.timezone[0])strlcpy(defaults.timezone,"UTC0",sizeof(defaults.timezone));
+  if(!defaults.ntp1[0])strlcpy(defaults.ntp1,"pool.ntp.org",sizeof(defaults.ntp1));
+  quicksettings::Credentials configuredWifi;
+  strlcpy(configuredWifi.ssid,cfg::WIFI_SSID,sizeof(configuredWifi.ssid));strlcpy(configuredWifi.password,cfg::WIFI_PASSWORD,sizeof(configuredWifi.password));
+  if(strcmp(configuredWifi.ssid,"YOUR_2_4_GHZ_WIFI") && quicksettings::validCredentials(configuredWifi)) runtimecfg::promoteWifi(defaults,configuredWifi);
+  Preferences old;
+  if(old.begin("ns-display",true)) {
+    defaults.hours=quicksettings::restoreHours(old.getUInt("hours",defaults.hours),defaults.hours);
+    defaults.mmol=old.getBool("mmol",defaults.mmol);defaults.forecast=old.getBool("forecast",true);defaults.sound=old.getBool("alerts-on",true);old.end();
+  }
+  if(old.begin("ns-wifi",true)) {
+    quicksettings::Credentials previous;
+    if(old.getBytesLength("network")==sizeof(previous) && old.getBytes("network",&previous,sizeof(previous))==sizeof(previous)) runtimecfg::promoteWifi(defaults,previous);
+    old.end();
+  }
+  liveSettings=defaults;
+  Preferences saved;
+  if(saved.begin("ns-runtime",true)) {
+    runtimecfg::Settings candidate;
+    if(saved.getBytesLength("profile")==sizeof(candidate) && saved.getBytes("profile",&candidate,sizeof(candidate))==sizeof(candidate) && runtimecfg::valid(candidate)) liveSettings=candidate;
+    saved.end();
+  }
+  uiSettings=netSettings=liveSettings;
+}
 bool configured() {
-  String u=cfg::NS_URL;
-  return stationSsid.length()>0 && stationSsid!="YOUR_2_4_GHZ_WIFI" &&
-    strcmp(cfg::NS_TOKEN,"YOUR_READ_ONLY_ACCESS_TOKEN") && strlen(cfg::NS_TOKEN)>0 &&
-    u.startsWith("https://") && u.length()>8 && !u.endsWith("/") &&
-    u.indexOf('@')<0 && u.indexOf('?')<0 && u.indexOf('#')<0 &&
-    !strchr(cfg::NS_TOKEN,'\r') && !strchr(cfg::NS_TOKEN,'\n');
+  return runtimecfg::https(netSettings.url) && netSettings.token[0] && strcmp(netSettings.token,"YOUR_READ_ONLY_ACCESS_TOKEN");
 }
 // Bounded decoded response sink. HTTPClient::writeToStream handles HTTP chunks;
 // don't deserialize http.getStream() directly (chunk framing is not JSON).
@@ -97,6 +162,18 @@ public:
   int peek() override {return -1;}
   void flush() override {}
 };
+// Portal documents prefer PSRAM so an open settings page does not compete
+// with TLS buffers for the smaller internal heap.
+struct PortalAllocator {
+  void *allocate(size_t size) {return allocateBody(size);}
+  void deallocate(void *value) {free(value);}
+  void *reallocate(void *value,size_t size) {
+    if(!size) {free(value);return nullptr;}
+    void *next=heap_caps_realloc(value,size,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    return next?next:realloc(value,size);
+  }
+};
+using PortalDocument=BasicJsonDocument<PortalAllocator>;
 // Network task only: JWTs are kept in RAM and never written to Preferences.
 String jwt;
 int64_t jwtExpiry=0;
@@ -129,7 +206,7 @@ bool ensureJwt(char *error,size_t cap) {
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   // This standard NS endpoint necessarily carries the subject token in its
   // TLS-protected path. Never print the path, credentials or response body.
-  if (!http.begin(tls,String(cfg::NS_URL)+"/api/v2/authorization/request/"+urlEncode(cfg::NS_TOKEN)))
+  if (!http.begin(tls,String(netSettings.url)+"/api/v2/authorization/request/"+urlEncode(netSettings.token)))
     return fail("V3 auth setup failed");
   http.addHeader("Accept","application/json");http.addHeader("Accept-Encoding","identity");
   int code=http.GET();
@@ -157,7 +234,7 @@ bool ensureJwt(char *error,size_t cap) {
   return true;
 }
 bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char *error, size_t cap, bool allowRenew=true) {
-  if (nscfg::USE_V3 && !ensureJwt(error,cap)) return false;
+  if (netSettings.v3 && !ensureJwt(error,cap)) return false;
   const bool glucose=resource==Resource::Glucose;
   const char *label=glucose?"SGV":resource==Resource::Status?"AAPS":"Treatments";
   WiFiClientSecure tls;
@@ -169,18 +246,18 @@ bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char
   http.setTimeout(20000);
   http.setReuse(false);
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-  if (!http.begin(tls,String(cfg::NS_URL)+path)) {strlcpy(error,"HTTPS setup failed",cap); return false;}
+  if (!http.begin(tls,String(netSettings.url)+path)) {strlcpy(error,"HTTPS setup failed",cap); return false;}
   http.addHeader("Accept","application/json");
   http.addHeader("Accept-Encoding","identity");
-  if (nscfg::USE_V3) http.addHeader("Authorization","Bearer "+jwt);
-  else http.addHeader("api-secret",cfg::NS_TOKEN);
+  if (netSettings.v3) http.addHeader("Authorization","Bearer "+jwt);
+  else http.addHeader("api-secret",netSettings.token);
   int code=http.GET();
-  if (nscfg::USE_V3 && code==401 && allowRenew) {
+  if (netSettings.v3 && code==401 && allowRenew) {
     http.end();jwt="";jwtExpiry=0;
     if (!ensureJwt(error,cap)) return false;
     return fetch(path,resource,s,time(nullptr),error,cap,false);
   }
-  if (nscfg::USE_V3 && code==401) authFailure("V3 access denied after renewal");
+  if (netSettings.v3 && code==401) authFailure("V3 access denied after renewal");
   bool ok=false;
   if (code!=200) {
     if (code<0) {
@@ -215,31 +292,34 @@ bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char
       DynamicJsonDocument items(4096),filter(6144);
       if (resource==Resource::Treatments) model::treatmentFilter(items);
       else model::makeFilter(items,glucose);
-      nsapi::responseFilter(filter,items,nscfg::USE_V3);
+      nsapi::responseFilter(filter,items,netSettings.v3);
       DynamicJsonDocument doc(65536);
       auto err=deserializeJson(doc,body.buffer.data,body.buffer.length,DeserializationOption::Filter(filter),DeserializationOption::NestingLimit(16));
       if (err) strlcpy(error,"Invalid/oversized JSON",cap);
       else {
-        JsonVariantConst collection=nsapi::collection(doc.as<JsonVariantConst>(),nscfg::USE_V3);
+        JsonVariantConst collection=nsapi::collection(doc.as<JsonVariantConst>(),netSettings.v3);
         if (resource==Resource::Glucose) ok=model::entries(collection,now,s.history);
-        else if (resource==Resource::Status) ok=model::statuses(collection,cfg::AAPS_DEVICE,now,s.status);
+        else if (resource==Resource::Status) ok=model::statuses(collection,netSettings.device,now,s.status);
         else ok=model::treatments(collection,now-int64_t(pollHours)*3600,now,s.treatments);
-        strlcpy(error,ok?"":nscfg::USE_V3?"Invalid V3 result/status":"Expected JSON array",cap);
+        strlcpy(error,ok?"":netSettings.v3?"Invalid V3 result/status":"Expected JSON array",cap);
         if(ok && glucose && collection.size()>=model::MAX_POINTS) strlcpy(error,"SGV history limited",cap);
       }
     }
   }
   http.end(); return ok;
 }
-void loadStationCredentials() {
-  stationSsid=cfg::WIFI_SSID;stationPassword=cfg::WIFI_PASSWORD;
-  Preferences saved;
-  if (!saved.begin("ns-wifi",true)) return;
-  quicksettings::Credentials c;
-  if(saved.getBytesLength("network")==sizeof(c) && saved.getBytes("network",&c,sizeof(c))==sizeof(c) && quicksettings::validCredentials(c)) {
-    stationSsid=c.ssid;stationPassword=c.password;
+bool connectSavedWifi() {
+  if(WiFi.status()==WL_CONNECTED) return true;
+  for(unsigned i=0;i<netSettings.wifiCount;++i) {
+    const auto &network=netSettings.wifi[i];
+    WiFi.disconnect(false);WiFi.begin(network.ssid,network.password);
+    for(int wait=0;wait<40 && WiFi.status()!=WL_CONNECTED;++wait) {
+      if(portalRequested.load()) return false;
+      vTaskDelay(pdMS_TO_TICKS(250));
+    }
+    if(WiFi.status()==WL_CONNECTED && WiFi.SSID()==network.ssid) return true;
   }
-  saved.end();
+  return false;
 }
 // The network task owns all Wi-Fi mutations. Normal Nightscout fetches pause
 // for setup; the UI continues aging cached readings and running enabled alerts.
@@ -247,7 +327,7 @@ void runWifiSetup() {
   snprintf(portalName,sizeof(portalName),"Core2-Setup-%04X",unsigned(esp_random()&0xffff));
   snprintf(portalPassword,sizeof(portalPassword),"%08X%08X",unsigned(esp_random()),unsigned(esp_random()));
   WiFi.setAutoReconnect(false);WiFi.mode(WIFI_AP_STA);
-  if(!WiFi.softAP(portalName,portalPassword,1,0,1)) {portalState.store(5);WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);return;}
+  if(!WiFi.softAP(portalName,portalPassword,1,0,1)) {portalState.store(5);WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(false);return;}
   WebServer server(80);DNSServer dns;
   dns.start(53,"*",WiFi.softAPIP());
   bool success=false;
@@ -273,10 +353,12 @@ void runWifiSetup() {
     if(!connected() || portalCancel.load()) {
       portalState.store(5);server.send(400,"text/plain","Connection failed. Previous settings kept. Retry or cancel on the Core2.");return;
     }
-    Preferences saved;bool stored=false;
-    if(saved.begin("ns-wifi",false)) {stored=saved.putBytes("network",&c,sizeof(c))==sizeof(c);saved.end();}
+    runtimecfg::Settings candidate;uint32_t revision;currentSettings(candidate,revision);
+    bool stored=runtimecfg::promoteWifi(candidate,c);
+    char saveError[64]={};
+    if(stored) stored=storeSettings(candidate,revision,saveError,sizeof(saveError));
     if(!stored) {portalState.store(5);server.send(500,"text/plain","Could not save. Previous settings kept.");return;}
-    stationSsid=c.ssid;stationPassword=c.password;success=true;
+    success=true;
     server.sendHeader("Cache-Control","no-store");server.send(200,"text/plain","Connected and saved. You can reconnect your phone to your usual network.");
     portalState.store(4);
   });
@@ -287,33 +369,38 @@ void runWifiSetup() {
   if(success) vTaskDelay(pdMS_TO_TICKS(500));
   else portalState.store(portalCancel.load()?7:6);
   server.stop();dns.stop();WiFi.softAPdisconnect(true);WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);WiFi.disconnect(false);WiFi.begin(stationSsid.c_str(),stationPassword.c_str());
+  WiFi.setAutoReconnect(false);WiFi.disconnect(false);
 }
 void worker(void*) {
   static Snapshot s;
   unsigned failures=0;
-  WiFi.persistent(false);WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true);loadStationCredentials();
-  configTzTime(displaycfg::TIMEZONE,cfg::NTP1,cfg::NTP2);
+  WiFi.persistent(false);WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(false);
+  String lastTimezone,lastNtp1,lastNtp2;
   for (;;) {
+    xSemaphoreTake(networkGate,portMAX_DELAY);
     if(portalRequested.exchange(false)) {
-      if(portalCancel.load()) portalState.store(7);else runWifiSetup();
+      if(portalCancel.load()) portalState.store(7);
+      else {apSetupActive.store(true);runWifiSetup();apSetupActive.store(false);}
     }
-    if(reconnectRequested.exchange(false)) WiFi.disconnect(false);
-    pollHours=graphHours.load();
+    uint32_t revision,epoch;currentSettings(netSettings,revision,&epoch);
+    if(s.connectionEpoch!=epoch) {
+      resetSnapshot(s);s.connectionEpoch=epoch;jwt="";jwtExpiry=0;authCooling=false;
+    }
+    if(lastTimezone!=netSettings.timezone || lastNtp1!=netSettings.ntp1 || lastNtp2!=netSettings.ntp2) {
+      configTzTime(netSettings.timezone,netSettings.ntp1,netSettings.ntp2);
+      lastTimezone=netSettings.timezone;lastNtp1=netSettings.ntp1;lastNtp2=netSettings.ntp2;
+    }
+    if(reconnectRequested.exchange(false)) {vTaskDelay(pdMS_TO_TICKS(500));WiFi.disconnect(false);}
+    pollHours=netSettings.hours;
     networkBusy.store(true);
     bool good=false;
-    if (!configured()) {
-      strlcpy(s.glucoseError,"Edit include/config.h",sizeof(s.glucoseError));
-      strlcpy(s.statusError,"Configuration required",sizeof(s.statusError));
+    if(!connectSavedWifi()) {
+      strlcpy(s.glucoseError,"WiFi offline",sizeof(s.glucoseError));
+      strlcpy(s.statusError,"WiFi offline",sizeof(s.statusError));
+    } else if(!configured()) {
+      strlcpy(s.glucoseError,"Configure Nightscout",sizeof(s.glucoseError));
+      strlcpy(s.statusError,"Use LAN portal or config.h",sizeof(s.statusError));
     } else {
-      if (WiFi.status()!=WL_CONNECTED) {
-        WiFi.disconnect(); WiFi.begin(stationSsid.c_str(),stationPassword.c_str());
-        for (int i=0;i<80 && WiFi.status()!=WL_CONNECTED;++i) vTaskDelay(pdMS_TO_TICKS(250));
-      }
-      if (WiFi.status()!=WL_CONNECTED) {
-        strlcpy(s.glucoseError,"WiFi offline",sizeof(s.glucoseError));
-        strlcpy(s.statusError,"WiFi offline",sizeof(s.statusError));
-      } else {
         int64_t now=time(nullptr);
         if (now<1767225600) {
           strlcpy(s.glucoseError,"Waiting for NTP clock",sizeof(s.glucoseError));
@@ -324,18 +411,18 @@ void worker(void*) {
           const long long sinceMs=(now-int64_t(pollHours)*3600)*1000;
           char since[32],until[32];snprintf(since,sizeof(since),"%lld",sinceMs);
           snprintf(until,sizeof(until),"%lld",(long long)(now+120)*1000);
-          String entryPath=nscfg::USE_V3?
+          String entryPath=netSettings.v3?
             String("/api/v3/entries?type$eq=sgv&date$gte=")+since+"&date$lte="+until+
               "&sort$desc=date&limit=288&fields=date,sgv,direction,isValid,isDeleted":
             String("/api/v1/entries/sgv.json?count=288&find[date][$gte]=")+since;
           bool a=fetch(entryPath,Resource::Glucose,s,now,s.glucoseError,sizeof(s.glucoseError));
-          String path=nscfg::USE_V3?
+          String path=netSettings.v3?
             "/api/v3/devicestatus?sort$desc=date&limit=2&fields=date,created_at,device,openaps,pump,isValid,isDeleted":
             "/api/v1/devicestatus.json?count=2&find[openaps][$exists]=true";
-          if (*cfg::AAPS_DEVICE) path+=String(nscfg::USE_V3?"&device$eq=":"&find[device]=")+urlEncode(cfg::AAPS_DEVICE);
+          if (*netSettings.device) path+=String(netSettings.v3?"&device$eq=":"&find[device]=")+urlEncode(netSettings.device);
           bool b=fetch(path,Resource::Status,s,time(nullptr),s.statusError,sizeof(s.statusError));
           String treatmentPath;
-          if (nscfg::USE_V3) {
+          if (netSettings.v3) {
             char current[32];snprintf(current,sizeof(current),"%lld",(long long)time(nullptr)*1000);
             treatmentPath=String("/api/v3/treatments?date$gte=")+since+"&date$lte="+current+
               "&sort$desc=date&limit=200&fields=identifier,date,created_at,mills,timestamp,carbs,insulin,isSMB,type,isValid,isDeleted,eventType,pumpId,pumpType,pumpSerial";
@@ -351,15 +438,50 @@ void worker(void*) {
           bool c=fetch(treatmentPath,Resource::Treatments,s,time(nullptr),s.treatmentError,sizeof(s.treatmentError));
           good=a&&b&&c;
         }
-      }
     }
     networkBusy.store(false);
     xQueueOverwrite(updates,&s);
+    xSemaphoreGive(networkGate);
     failures=good?0:std::min(failures+1,4u);
-    unsigned wait=good?cfg::POLL_SECONDS:std::min(15u*(1u<<failures),300u);
+    unsigned wait=good?netSettings.poll:std::min(15u*(1u<<failures),300u);
     ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(wait*1000));
   }
 }
+bool testNightscoutConnection(const runtimecfg::Settings &settings,char *error,size_t cap) {
+  if(!settings.token[0] || !strcmp(settings.token,"YOUR_READ_ONLY_ACCESS_TOKEN")) {strlcpy(error,"Set a read-only Nightscout token",cap);return false;}
+  if(time(nullptr)<1767225600) {strlcpy(error,"Wait for a valid NTP clock before testing HTTPS",cap);return false;}
+  String accessToken;
+  auto get=[&](const String &path,Body &body,bool authenticate) {
+    WiFiClientSecure tls;tls.setCACert(reinterpret_cast<const char*>(rootStart));tls.setHandshakeTimeout(12);
+    HTTPClient http;http.setUserAgent("ESP32HTTPClient");http.setConnectTimeout(10000);http.setTimeout(20000);http.setReuse(false);
+    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    if(!http.begin(tls,String(settings.url)+path)) return -1;
+    http.addHeader("Accept","application/json");http.addHeader("Accept-Encoding","identity");
+    if(authenticate) {if(settings.v3)http.addHeader("Authorization","Bearer "+accessToken);else http.addHeader("api-secret",settings.token);}
+    int code=http.GET();
+    if(code==200) {int got=http.writeToStream(&body);int expected=http.getSize();if(got<0 || body.buffer.overflow || (expected>=0 && got!=expected))code=-2;}
+    http.end();return code;
+  };
+  if(settings.v3) {
+    Body auth(8192);if(!auth.buffer.data) {strlcpy(error,"Test response allocation failed",cap);return false;}
+    int code=get(String("/api/v2/authorization/request/")+urlEncode(settings.token),auth,false);
+    if(code!=200) {if(code>0)snprintf(error,cap,"Auth HTTP %d",code);else strlcpy(error,"Auth TLS/network or response failed",cap);return false;}
+    PortalDocument filter(256),doc(6144);filter["token"]=true;filter["exp"]=true;
+    auto jsonError=deserializeJson(doc,auth.buffer.data,auth.buffer.length,DeserializationOption::Filter(filter),DeserializationOption::NestingLimit(8));
+    const char *token=nullptr;int64_t expires=0;
+    if(jsonError || !nsapi::tokenResponse(doc.as<JsonVariantConst>(),time(nullptr),token,expires)) {strlcpy(error,"Invalid authorization response",cap);return false;}
+    accessToken=token;
+  }
+  Body body(8192);if(!body.buffer.data) {strlcpy(error,"Test response allocation failed",cap);return false;}
+  int code=get(settings.v3?"/api/v3/entries?type$eq=sgv&limit=1&fields=date,sgv":"/api/v1/entries/sgv.json?count=1",body,true);
+  if(code!=200) {if(code>0)snprintf(error,cap,"Entries HTTP %d",code);else strlcpy(error,"Entries TLS/network or response failed",cap);return false;}
+  PortalDocument doc(6144);
+  if(deserializeJson(doc,body.buffer.data,body.buffer.length,DeserializationOption::NestingLimit(8)) || nsapi::collection(doc.as<JsonVariantConst>(),settings.v3).isNull()) {
+    strlcpy(error,"Invalid entries response",cap);return false;
+  }
+  return true;
+}
+#include "lan_service.h"
 String amount(float n, unsigned digits=2) {return std::isfinite(n)?String(n,digits):String("--");}
 String compactAmount(float value) {
   String text=amount(value,2);
@@ -449,9 +571,9 @@ uint64_t timedFingerprint(int64_t now) {
   ScreenFingerprint h;
   const auto &s=ui.status;
   int64_t glucoseTime=ui.history.count?ui.history.p[ui.history.count-1].t:0;
-  h.integer(model::fresh(glucoseTime,now,cfg::SGV_STALE_SECONDS));
+  h.integer(model::fresh(glucoseTime,now,uiSettings.sgvStale));
   for (int64_t t : {s.iob.t,s.cob.t,s.basal.t,s.loopTime,s.pumpTime,s.forecast.t})
-    h.integer(model::fresh(t,now,cfg::AAPS_STALE_SECONDS));
+    h.integer(model::fresh(t,now,uiSettings.apsStale));
   h.integer(!s.tempUntil || now<s.tempUntil);
   int64_t start=now-int64_t(graphHours.load())*3600;
   // Repaint only when a sample enters/leaves the visible history window.
@@ -586,8 +708,8 @@ void drawLiveFields(int64_t now,bool force=false) {
   int64_t glucoseTime=ui.history.count?ui.history.p[ui.history.count-1].t:0;
   String ageText="BG "+age(glucoseTime,now);
   String loopText="APS "+age(ui.status.loopTime,now);
-  bool bgFresh=model::fresh(glucoseTime,now,cfg::SGV_STALE_SECONDS);
-  bool apsFresh=model::fresh(ui.status.loopTime,now,cfg::AAPS_STALE_SECONDS);
+  bool bgFresh=model::fresh(glucoseTime,now,uiSettings.sgvStale);
+  bool apsFresh=model::fresh(ui.status.loopTime,now,uiSettings.apsStale);
   if (force || ageText!=previousAge || loopText!=previousLoop || bgFresh!=previousBgFresh || apsFresh!=previousApsFresh) {
     M5.Display.fillRect(174,32,146,12,TFT_BLACK);
     M5.Display.setTextSize(1);M5.Display.setTextColor(bgFresh?TFT_LIGHTGREY:TFT_ORANGE,TFT_BLACK);
@@ -595,13 +717,15 @@ void drawLiveFields(int64_t now,bool force=false) {
     // Bright blue distinguishes AAPS age from the glucose age beside it.
     M5.Display.setTextColor(apsFresh?0x551F:TFT_ORANGE,TFT_BLACK);
     M5.Display.setCursor(315-M5.Display.textWidth(loopText),35);M5.Display.print(loopText);
+    M5.Display.fillRect(174,16,146,12,TFT_BLACK);
+    if(!apsFresh) {M5.Display.setTextColor(TFT_ORANGE,TFT_BLACK);M5.Display.setCursor(176,18);M5.Display.print("No recent loop");}
     previousAge=ageText;previousLoop=loopText;previousBgFresh=bgFresh;previousApsFresh=apsFresh;
   }
 }
 uint16_t glucoseColor(float value,bool fresh) {
   if (!fresh) return TFT_LIGHTGREY;
-  if (value<cfg::LOW_MGDL) return TFT_RED;
-  if (value>cfg::HIGH_MGDL) return TFT_ORANGE;
+  if (value<uiSettings.low) return TFT_RED;
+  if (value>uiSettings.high) return TFT_ORANGE;
   return TFT_GREEN;
 }
 void glucoseSegment(int x1,int y1,float v1,int x2,int y2,float v2,bool fresh) {
@@ -632,9 +756,9 @@ void drawFooterControls() {
   for(int i=0;i<15;++i) {
     float a=(45+i*18)*0.017453293f,b=(45+(i+1)*18)*0.017453293f;
     M5.Display.drawLine(cx+int(std::lround(4*std::cos(a))),cy+int(std::lround(4*std::sin(a))),
-      cx+int(std::lround(4*std::cos(b))),cy+int(std::lround(4*std::sin(b))),TFT_LIGHTGREY);
+      cx+int(std::lround(4*std::cos(b))),cy+int(std::lround(4*std::sin(b))),TFT_GREEN);
   }
-  M5.Display.fillTriangle(cx+3,cy-4,cx+5,cy-1,cx+1,cy-1,TFT_LIGHTGREY);
+  M5.Display.fillTriangle(cx+3,cy-4,cx+5,cy-1,cx+1,cy-1,TFT_GREEN);
   drawSettingsCog(160,234);
   // Actual line followed by a dashed projection: the forecast shortcut.
   uint16_t forecastColor=showForecast?TFT_CYAN:TFT_DARKGREY;
@@ -650,7 +774,7 @@ void draw() {
   int64_t now=displayNow();
   bool have=ui.history.count>0;
   model::Point last=have?ui.history.p[ui.history.count-1]:model::Point{};
-  bool fresh=have && model::fresh(last.t,now,cfg::SGV_STALE_SECONDS);
+  bool fresh=have && model::fresh(last.t,now,uiSettings.sgvStale);
   uint16_t col=glucoseColor(last.sgv,fresh);
   line(2,"NIGHTSCOUT",TFT_LIGHTGREY);
   M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
@@ -667,10 +791,37 @@ void draw() {
   drawTrendArrow(have?last.direction:"NONE",arrowCenter,33,col);
   // History, treatment lanes and a separately marked future interval.
   const auto &pred=ui.status.forecast;
-  bool predicted=showForecast && fresh && model::fresh(pred.t,now,cfg::AAPS_STALE_SECONDS);
+  bool predicted=showForecast && fresh && model::fresh(pred.t,now,uiSettings.apsStale);
   int64_t start=now-int64_t(graphHours.load())*3600;
   int64_t end=now+(predicted?3600:0);
   auto xx=[&](int64_t t){return 30+int((t-start)*284/(end-start));};
+  M5.Display.setFont(&fonts::Font0);M5.Display.setTextSize(1);
+  const int labelLeft=30,labelRight=std::min(314,xx(now));
+  static smblabels::Layout smbLabels;smbLabels.reset();
+  for(size_t i=0;i<ui.treatments.count;++i) {
+    const auto &event=ui.treatments.events[i];
+    if(event.t>=start && event.t<=now && event.smb && event.insulin>0) smbLabels.add(xx(event.t),event.insulin);
+  }
+  auto smbText=[&](const smblabels::Group &group) {
+    String text=compactAmount(group.units);if(group.count>1)text="="+text;return text;
+  };
+  bool labelsFit=smbLabels.arrange(labelLeft,labelRight,[&](const smblabels::Group &group){return M5.Display.textWidth(smbText(group));});
+  bool secondInsulinRow=false;
+  if(labelsFit)for(size_t i=0;i<smbLabels.size;++i)secondInsulinRow|=smbLabels.groups[i].lane==1;
+  struct BolusLabel {size_t index;int x,lane;};
+  static BolusLabel bolusLabels[smblabels::CAPACITY];size_t bolusLabelCount=0;
+  int lastBolusEnd[2]={labelLeft,labelLeft};
+  for(size_t i=0;i<ui.treatments.count;++i) {
+    const auto &event=ui.treatments.events[i];
+    if(event.smb || event.insulin<=0 || event.t<start || event.t>now)continue;
+    String text="B"+compactAmount(event.insulin);int width=M5.Display.textWidth(text);
+    int x=std::max(labelLeft,std::min(xx(event.t)-width/2,labelRight+1-width));
+    for(int row=0;row<2;++row)if(x>=lastBolusEnd[row] && (!labelsFit || !smbLabels.overlaps(row,x,width))) {
+      if(bolusLabelCount<smblabels::CAPACITY)bolusLabels[bolusLabelCount++]={i,x,row};
+      secondInsulinRow|=row==1;lastBolusEnd[row]=x+width+3;break;
+    }
+  }
+  const int plotBottom=secondInsulinRow?152:162;
   graphscale::Range visibleRange;
   for (size_t i=0;i<ui.history.count;++i) {
     const auto &point=ui.history.p[i];
@@ -682,11 +833,11 @@ void draw() {
     int64_t t=pred.t+int64_t(i)*300;float v=pred.bg[k][i];
     if(t>=now-300 && t<=end+300 && std::isfinite(v) && (v<low || v>high)) forecastClipped=true;
   }
-  auto yy=[&](float v){return layout::PLOT_BOTTOM-int((v-low)/(high-low)*(layout::PLOT_BOTTOM-layout::PLOT_TOP));};
+  auto yy=[&](float v){return plotBottom-int((v-low)/(high-low)*(plotBottom-layout::PLOT_TOP));};
   // Shade each plot row by its represented glucose value. This keeps bands
   // clipped to the dynamic scale with no gaps/overlapping boundary pixels.
-  for (int y=layout::PLOT_TOP;y<=layout::PLOT_BOTTOM;++y) {
-    float value=low+(high-low)*float(layout::PLOT_BOTTOM-y)/(layout::PLOT_BOTTOM-layout::PLOT_TOP);
+  for (int y=layout::PLOT_TOP;y<=plotBottom;++y) {
+    float value=low+(high-low)*float(plotBottom-y)/(plotBottom-layout::PLOT_TOP);
     uint16_t background=value<70?0x2000:value<=180?0x0120:value<=249?0x20A0:0x2000;
     M5.Display.drawFastHLine(30,y,285,background);
   }
@@ -694,28 +845,26 @@ void draw() {
   auto label=[&](int x,int y,const String &text,uint16_t color) {
     M5.Display.setTextColor(color,TFT_BLACK);M5.Display.setCursor(x,y);M5.Display.print(text);
   };
-  M5.Display.fillTriangle(21,layout::LEGEND_Y,18,layout::LEGEND_Y+5,24,layout::LEGEND_Y+5,TFT_ORANGE);
-  M5.Display.fillCircle(95,layout::LEGEND_Y+3,2,TFT_CYAN);
-  M5.Display.fillCircle(158,layout::LEGEND_Y+3,1,TFT_LIGHTGREY);
-  label(30,layout::LEGEND_Y,"Carbs g",TFT_ORANGE);label(104,layout::LEGEND_Y,"SMB U",TFT_CYAN);label(167,layout::LEGEND_Y,"Bolus U",TFT_LIGHTGREY);
-  if (predicted) {
-    const char *keys[]={"IOB","COB","UAM","ZT"};
-    const uint16_t colors[]={TFT_MAGENTA,TFT_ORANGE,TFT_YELLOW,TFT_CYAN};
-    for (size_t k=0;k<model::PRED_LINES;++k) label(30+k*45,layout::FORECAST_LEGEND_Y,keys[k],pred.count[k]?colors[k]:TFT_DARKGREY);
-    label(225,layout::FORECAST_LEGEND_Y,forecastClipped?"FCAST CLIPPED":"FORECAST",forecastClipped?TFT_ORANGE:TFT_LIGHTGREY);
-  } else label(30,layout::FORECAST_LEGEND_Y,showForecast?"Forecast unavailable/stale":"Forecast off (button C)",TFT_DARKGREY);
-  // Frame the upper legend rows without touching their glyphs or the plot.
-  M5.Display.drawFastHLine(18,49,297,0x4208);
-  M5.Display.drawFastHLine(18,70,297,0x4208);
+  label(30,layout::LEGEND_Y,"C g",TFT_ORANGE);label(65,layout::LEGEND_Y,"SMB U",TFT_CYAN);label(110,layout::LEGEND_Y,"Bol U",TFT_LIGHTGREY);
+  M5.Display.drawFastVLine(155,51,8,0x4208);
+  if(predicted) {
+    const char *keys[]={"IOB","COB","UAM","ZT"};const uint16_t colors[]={TFT_MAGENTA,TFT_ORANGE,TFT_YELLOW,TFT_CYAN};
+    int legendX=170;
+    for(size_t k=0;k<model::PRED_LINES;++k)if(pred.count[k]) {label(legendX,layout::LEGEND_Y,keys[k],colors[k]);legendX+=36;}
+    if(forecastClipped) {label(307,layout::LEGEND_Y,"*",TFT_ORANGE);label(128,18,"CLIP",TFT_ORANGE);}
+  } else label(170,layout::LEGEND_Y,showForecast?"Forecast stale":"Forecast off",TFT_DARKGREY);
+  M5.Display.drawFastHLine(18,49,297,0x4208);M5.Display.drawFastHLine(18,60,297,0x4208);
   auto axisLabel=[&](int y,float mgdl) {
     String text=amount(mmol?mgdl/18.0182f:mgdl,mmol?1:0);
     label(std::max(0,27-M5.Display.textWidth(text)),y,text,TFT_LIGHTGREY);
   };
   axisLabel(layout::PLOT_TOP,high);
-  axisLabel(layout::PLOT_BOTTOM-8,low);
-  for (int v : {cfg::LOW_MGDL,cfg::HIGH_MGDL}) if (v>=low && v<=high)
-    M5.Display.drawFastHLine(30,yy(v),284,0x2104);
-  if (predicted) M5.Display.drawFastVLine(xx(now),layout::PLOT_TOP,layout::PLOT_BOTTOM-layout::PLOT_TOP+1,TFT_LIGHTGREY);
+  axisLabel(plotBottom-8,low);
+  for(int v:{70,180})if(v>=low && v<=high) {
+    int y=yy(v);M5.Display.drawFastHLine(30,y,285,0x2104);
+    if(y-4>layout::PLOT_TOP+10 && y-4<plotBottom-13)axisLabel(y-4,v);
+  }
+  if (predicted) M5.Display.drawFastVLine(xx(now),layout::PLOT_TOP,plotBottom-layout::PLOT_TOP+1,TFT_LIGHTGREY);
   int px=-1,py=0;int64_t pt=0;float previousGlucose=NAN;
   for (size_t i=0;i<ui.history.count;++i) {
     const auto &p=ui.history.p[i];if (p.t<start || p.t>now) continue;
@@ -740,19 +889,16 @@ void draw() {
       int steps=std::max(abs(x2-x1),abs(y2-y1));
       for (int q=0;q<=steps;++q) if (q%5<3) {
         int x=x1+(x2-x1)*q/std::max(1,steps),y=y1+(y2-y1)*q/std::max(1,steps);
-        if (x>=xx(now) && x<=314 && y>=layout::PLOT_TOP && y<=layout::PLOT_BOTTOM) M5.Display.drawPixel(x,y,colors[k]);
+        if (x>=xx(now) && x<=314 && y>=layout::PLOT_TOP && y<=plotBottom) M5.Display.drawPixel(x,y,colors[k]);
       }
     }
   }
   // Keep treatment lanes at the plot bottom as the glucose scale changes.
   // Amount labels use the reserved rows beneath the plot.
-  const int treatmentLine=layout::PLOT_BOTTOM;
+  const int treatmentLine=plotBottom;
   const int carbMarkerY=std::max(layout::PLOT_TOP+3,treatmentLine-5);
   const int insulinMarkerY=std::max(layout::PLOT_TOP+3,treatmentLine-12);
-  const int labelLeft=30,labelRight=std::min(314,xx(now));
   int lastCarbLabel=labelLeft;
-  static smblabels::Layout smbLabels;
-  smbLabels.reset();
   for (size_t i=0;i<ui.treatments.count;++i) {
     const auto &e=ui.treatments.events[i];if (e.t<start || e.t>now) continue;
     int x=xx(e.t);
@@ -764,15 +910,8 @@ void draw() {
     }
     if (e.insulin>0) {
       M5.Display.fillCircle(x,insulinMarkerY,e.smb?2:1,e.smb?TFT_CYAN:TFT_LIGHTGREY);
-      if (e.smb) smbLabels.add(x,e.insulin);
     }
   }
-  auto smbText=[&](const smblabels::Group &group) {
-    String text=compactAmount(group.units);
-    if (group.count>1) text="="+text;
-    return text;
-  };
-  bool labelsFit=smbLabels.arrange(labelLeft,labelRight,[&](const smblabels::Group &g){return M5.Display.textWidth(smbText(g));});
   if (labelsFit) for (size_t i=0;i<smbLabels.size;++i) {
     const auto &g=smbLabels.groups[i];int y=treatmentLine+13+g.lane*11;
     if (g.count>1) {
@@ -782,46 +921,33 @@ void draw() {
     } else M5.Display.drawLine(g.first,y-3,g.x+g.width/2,y-1,TFT_CYAN);
     label(g.x,y,smbText(g),TFT_CYAN);
   }
-  // Keep non-SMB boluses distinct; never include them in a cyan SMB total.
-  int lastBolusEnd[2]={labelLeft,labelLeft};
-  for (size_t i=0;i<ui.treatments.count;++i) {
-    const auto &e=ui.treatments.events[i];
-    if (e.smb || e.insulin<=0 || e.t<start || e.t>now) continue;
-    int x=xx(e.t);String text="B"+compactAmount(e.insulin);
-    int width=M5.Display.textWidth(text),tx=std::max(labelLeft,std::min(x-width/2,labelRight+1-width));
-    for (int row=0;row<2;++row) if (tx>=lastBolusEnd[row] &&
-        (!labelsFit || !smbLabels.overlaps(row,tx,width))) {
-      int y=treatmentLine+13+row*11;
-      M5.Display.drawLine(x,y-3,tx+width/2,y-1,TFT_LIGHTGREY);
-      label(tx,y,text,TFT_LIGHTGREY);lastBolusEnd[row]=tx+width+3;break;
-    }
+  // Manual boluses use the positions reserved during the layout pass.
+  for(size_t i=0;i<bolusLabelCount;++i) {
+    const auto &placement=bolusLabels[i];const auto &event=ui.treatments.events[placement.index];
+    String text="B"+compactAmount(event.insulin);int y=treatmentLine+13+placement.lane*11;
+    M5.Display.drawLine(xx(event.t),y-3,placement.x+M5.Display.textWidth(text)/2,y-1,TFT_LIGHTGREY);
+    label(placement.x,y,text,TFT_LIGHTGREY);
   }
   label(30,layout::TIME_Y,"-"+String(graphHours.load())+"h",TFT_LIGHTGREY);
   label(std::max(62,xx(now)-12),layout::TIME_Y,"now",TFT_LIGHTGREY);
   if (predicted) label(278,layout::TIME_Y,"+1h",TFT_LIGHTGREY);
   // Treatment and time labels occupy y154..191, between these dividers.
-  M5.Display.drawFastHLine(30,153,285,0x4208);
+  M5.Display.drawFastHLine(30,plotBottom+1,285,0x4208);
   M5.Display.drawFastHLine(30,192,285,0x4208);
   auto &s=ui.status;
-  auto value=[&](const model::Metric &m,unsigned d){ return model::fresh(m.t,now,cfg::AAPS_STALE_SECONDS)?amount(m.value,d):String("--");};
-  // Fixed columns and right-aligned numbers keep changing values stable.
-  M5.Display.setFont(&fonts::Font2);M5.Display.setTextSize(1);
-  M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
-  M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
-  M5.Display.drawString("IOB",5,layout::IOB_Y);
-  M5.Display.drawString("U",132,layout::IOB_Y);
-  M5.Display.drawString("COB",165,layout::IOB_Y);
-  M5.Display.drawString("g",299,layout::IOB_Y);
-  M5.Display.setTextColor(TFT_WHITE,TFT_BLACK);
-  M5.Display.setTextDatum(lgfx::textdatum_t::top_right);
-  M5.Display.drawString(value(s.iob,2),124,layout::IOB_Y);
-  M5.Display.drawString(value(s.cob,0),291,layout::IOB_Y);
-  M5.Display.setFont(&fonts::Font0);
-  M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
-  bool basalFresh=model::fresh(s.basal.t,now,cfg::AAPS_STALE_SECONDS) && (!s.tempUntil || now<s.tempUntil);
+  auto value=[&](const model::Metric &m,unsigned d){ return model::fresh(m.t,now,uiSettings.apsStale)?amount(m.value,d):String("--");};
+  // Quieter labels with stronger, fixed-position metric values.
+  M5.Display.setFont(&fonts::Font0);M5.Display.setTextSize(1);M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
+  M5.Display.setCursor(5,201);M5.Display.print("IOB");M5.Display.setCursor(132,201);M5.Display.print("U");
+  M5.Display.setCursor(165,201);M5.Display.print("COB");M5.Display.setCursor(299,201);M5.Display.print("g");
+  M5.Display.setFont(&fonts::FreeSansBold12pt7b);M5.Display.setTextColor(TFT_WHITE,TFT_BLACK);
+  M5.Display.setTextDatum(lgfx::textdatum_t::baseline_right);
+  M5.Display.drawString(value(s.iob,2),124,211);M5.Display.drawString(value(s.cob,0),291,211);
+  M5.Display.setFont(&fonts::Font0);M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
+  bool basalFresh=model::fresh(s.basal.t,now,uiSettings.apsStale) && (!s.tempUntil || now<s.tempUntil);
   String basalText="Basal "+(basalFresh?amount(s.basal.value):String("--"))+" U/h ("+s.basalKind+")";
   line(layout::BASAL_Y,basalText,TFT_WHITE);
-  String modeValue=model::fresh(s.pumpTime,now,cfg::AAPS_STALE_SECONDS)?s.pump:"Unknown/stale";
+  String modeValue=model::fresh(s.pumpTime,now,uiSettings.apsStale)?s.pump:"Unknown/stale";
   String modeText="Mode "+modeValue;
   int available=315-(5+M5.Display.textWidth(basalText)+12);
   if (M5.Display.textWidth(modeText)>available) {
@@ -855,7 +981,7 @@ void updateGlucoseAlerts(int64_t now) {
   bool have=ui.history.count>0;
   model::Point latest=have?ui.history.p[ui.history.count-1]:model::Point{};
   alerts::Event event=glucoseAlerts.poll(latest.sgv,
-    have && model::fresh(latest.t,now,cfg::SGV_STALE_SECONDS),tick);
+    have && model::fresh(latest.t,now,uiSettings.sgvStale),tick,uiSettings.low,uiSettings.high);
   if (event==alerts::Event::None) {retrying=false;return;}
   if (staleSoundActive || M5.Speaker.isPlaying()) return;
   if (retrying && retryEvent==event && uint32_t(tick-lastAttempt)<30000) return;
@@ -894,24 +1020,34 @@ void updateStaleAlerts(int64_t now) {
   if (M5.Speaker.tone(950,160)) {sounding=pending;phaseAt=tick;staleSoundActive=true;}
   else {retrying=true;lastAttempt=tick;}
 }
-void toggleGlucoseAlerts() {
-  bool enabled=!glucoseAlerts.isEnabled();
-  glucoseAlerts.setEnabled(enabled);
-  if (!enabled) {M5.Speaker.stop();staleSoundActive=false;}
-  if (alertPreferencesReady && !alertPreferences.putBool("alerts-on",enabled))
-    Serial.println("Could not save alert toggle; current session setting still applies.");
-  if (!settingsOpen) drawSpeakerIndicator(true);
-  // Muting clears retries immediately; enabling evaluates the current fresh SGV.
-  updateGlucoseAlerts(displayNow());
+bool applyUiSettings(bool force=false) {
+  if(!force && uiRevision==settingsRevision.load())return false;
+  runtimecfg::Settings next;uint32_t revision,epoch;currentSettings(next,revision,&epoch);
+  bool changedThresholds=uiSettings.low!=next.low || uiSettings.high!=next.high;
+  uiSettings=next;uiRevision=revision;mmol=next.mmol;showForecast=next.forecast;graphHours.store(next.hours);
+  if(changedThresholds && glucoseAlerts.isEnabled())glucoseAlerts.setEnabled(false);
+  glucoseAlerts.setEnabled(next.sound);
+  M5.Display.setBrightness(settingsOpen?std::max(20u,next.brightness):next.brightness);M5.Speaker.setVolume(next.volume);
+  if(!next.sound) {M5.Speaker.stop();staleSoundActive=false;}
+  if(uiEpoch!=epoch) {
+    glucoseAlerts.setEnabled(false);glucoseAlerts.setEnabled(next.sound);staleAlerts=alerts::StaleState{};
+    if(staleSoundActive)M5.Speaker.stop();staleSoundActive=false;
+    int64_t clock=ui.clockAt,mono=ui.monoAt;resetSnapshot(ui);ui.clockAt=clock;ui.monoAt=mono;ui.connectionEpoch=epoch;uiEpoch=epoch;
+  }
+  rendered=false;return true;
 }
 void saveDisplaySettings() {
-  if(!alertPreferencesReady) return;
-  bool ok=alertPreferences.putUInt("hours",graphHours.load())>0;
-  ok=(alertPreferences.putBool("mmol",mmol)>0) && ok;
-  ok=(alertPreferences.putBool("forecast",showForecast)>0) && ok;
-  if(!ok) Serial.println("Display setting save failed; session values remain active.");
+  runtimecfg::Settings next;uint32_t revision;currentSettings(next,revision);
+  next.hours=graphHours.load();next.mmol=mmol;next.forecast=showForecast;next.sound=glucoseAlerts.isEnabled();
+  storeSettings(next,revision,settingsMessage,sizeof(settingsMessage));applyUiSettings(true);
+}
+void toggleGlucoseAlerts() {
+  glucoseAlerts.setEnabled(!glucoseAlerts.isEnabled());saveDisplaySettings();
+  if(!settingsOpen)drawSpeakerIndicator(true);
+  updateGlucoseAlerts(displayNow());
 }
 void drawSettings() {
+  M5.Display.setBrightness(std::max(20u,uiSettings.brightness));
   M5.Display.fillScreen(TFT_BLACK);M5.Display.setFont(&fonts::Font2);
   M5.Display.setTextSize(1);M5.Display.setTextDatum(lgfx::textdatum_t::top_left);
   M5.Display.setTextColor(TFT_WHITE,TFT_BLACK);M5.Display.drawString("Quick settings",8,3);
@@ -940,6 +1076,12 @@ void drawSettings() {
     }
     text(8,226,"Back cancels setup.");return;
   }
+  if(wifiMenuOpen) {
+    text(8,43,"Wi-Fi connections",TFT_CYAN);
+    button(8,76,304,"Reconnect saved Wi-Fi");button(8,120,304,"Temporary setup hotspot");
+    text(8,166,"Manage saved networks in the LAN portal.");
+    text(8,190,"Hotspot setup also works without LAN.");return;
+  }
   text(8,35,"Graph history");
   const unsigned hours[]={1,3,6,12};
   for(int i=0;i<4;++i)button(8+i*77,49,71,String(hours[i])+" hours",graphHours.load()==hours[i]);
@@ -947,21 +1089,36 @@ void drawSettings() {
   button(166,87,146,String("Forecast: ")+(showForecast?"On":"Off"),showForecast);
   button(8,125,146,String("Units: ")+(mmol?"mmol/L":"mg/dL"));
   button(166,125,146,"Wi-Fi setup");
-  button(8,163,304,"Reconnect saved Wi-Fi");
-  String network=WiFi.status()==WL_CONNECTED?WiFi.SSID():String("Disconnected");
-  while(network.length() && M5.Display.textWidth(network)>290) network.remove(network.length()-1);
-  text(8,202,network);
-  text(8,222,state==4?"Wi-Fi connected and saved":state==6?"Wi-Fi setup timed out":state==7?"Wi-Fi setup canceled":"Settings save automatically",state==4?TFT_GREEN:TFT_LIGHTGREY);
+  button(8,159,304,String("LAN portal: ")+(lanRequested.load()?"On":"Off"),lanRequested.load());
+  if(lanRequested.load()) {
+    if(lanStatus.state==1) {text(8,198,lanStatus.address,TFT_CYAN);text(8,212,String("Access code: ")+lanStatus.code,TFT_WHITE);}
+    else text(8,198,"Waiting for LAN Wi-Fi...",TFT_ORANGE);
+  } else {
+    text(8,198,"Off by default; port 3000");
+    String network=WiFi.status()==WL_CONNECTED?WiFi.SSID():String("Disconnected");
+    while(network.length() && M5.Display.textWidth(network)>290)network.remove(network.length()-1);
+    text(8,212,network);
+  }
+  if(*settingsMessage)text(8,229,String(settingsMessage).substring(0,50),TFT_ORANGE);
+
 }
 void closeSettings() {
+  if(wifiMenuOpen) {wifiMenuOpen=false;drawSettings();return;}
   int state=portalState.load();
   if(state==1 || state==2 || state==3 || state==5) portalCancel.store(true);
-  settingsOpen=false;rendered=false;
+  settingsOpen=false;wifiMenuOpen=false;M5.Display.setBrightness(uiSettings.brightness);rendered=false;
 }
 void settingsTouch(int x,int y) {
   if(x>=258 && y<32) {closeSettings();return;}
   int state=portalState.load();
   if(state==1 || state==2 || state==3 || state==5) return;
+  if(wifiMenuOpen) {
+    if(y>=76 && y<104 && x>=8 && x<312) {reconnectRequested.store(true);xTaskNotifyGive(networkTask);}
+    if(y>=120 && y<148 && x>=8 && x<312) {
+      wifiMenuOpen=false;portalCancel.store(false);portalState.store(1);portalRequested.store(true);xTaskNotifyGive(networkTask);
+    }
+    drawSettings();return;
+  }
   if(y>=49 && y<77 && x>=8 && x<312) {
     const unsigned hours[]={1,3,6,12};int column=(x-8)/77;
     if(column<4 && (x-8)%77<71) {graphHours.store(hours[column]);saveDisplaySettings();xTaskNotifyGive(networkTask);}
@@ -971,9 +1128,11 @@ void settingsTouch(int x,int y) {
   } else if(y>=125 && y<153) {
     if(x>=8 && x<154) {mmol=!mmol;saveDisplaySettings();}
     else if(x>=166 && x<312) {
-      portalCancel.store(false);portalState.store(1);portalRequested.store(true);xTaskNotifyGive(networkTask);
+      wifiMenuOpen=true;
     }
-  } else if(y>=163 && y<191 && x>=8 && x<312) {reconnectRequested.store(true);xTaskNotifyGive(networkTask);}
+  } else if(y>=159 && y<187 && x>=8 && x<312) {
+    lanRequested.store(!lanRequested.load());lanStatus=LanStatus{};
+  }
   drawSettings();
 }
 void setup() {
@@ -987,24 +1146,26 @@ void setup() {
   Serial.begin(115200);
   M5.Speaker.setVolume(alerts::VOLUME);
 #ifdef RUN_PARSER_TESTS
-  runParserTests();
+  if(xTaskCreatePinnedToCore([](void*) {runParserTests();vTaskDelete(nullptr);},"parser-tests",49152,nullptr,1,nullptr,1)!=pdPASS)
+    Serial.println("Parser test task allocation failed");
   for (;;) delay(1000);
 #endif
-  alertPreferencesReady=alertPreferences.begin("ns-display",false);
-  if (alertPreferencesReady) {
-    glucoseAlerts.setEnabled(alertPreferences.getBool("alerts-on",true));
-    graphHours.store(quicksettings::restoreHours(alertPreferences.getUInt("hours",cfg::GRAPH_HOURS),cfg::GRAPH_HOURS));
-    mmol=alertPreferences.getBool("mmol",cfg::MMOL);
-    showForecast=alertPreferences.getBool("forecast",true);
+  settingsMutex=xSemaphoreCreateMutex();networkGate=xSemaphoreCreateMutex();
+  updates=xQueueCreate(1,sizeof(Snapshot));lanUpdates=xQueueCreate(1,sizeof(LanStatus));
+  if(!settingsMutex || !networkGate || !updates || !lanUpdates) {
+    line(20,"Memory allocation failed",TFT_RED);for(;;)delay(1000);
   }
-  updates=xQueueCreate(1,sizeof(Snapshot));
-  if (!updates || xTaskCreatePinnedToCore(worker,"network",49152,nullptr,1,&networkTask,0)!=pdPASS) {
-    line(20,"Memory/task allocation failed",TFT_RED); for (;;) delay(1000);
+  loadRuntimeSettings();applyUiSettings(true);
+  if(xTaskCreatePinnedToCore(worker,"network",49152,nullptr,1,&networkTask,0)!=pdPASS ||
+     xTaskCreatePinnedToCore(lanWorker,"lan-portal",16384,nullptr,1,nullptr,0)!=pdPASS) {
+    line(20,"Task allocation failed",TFT_RED);for(;;)delay(1000);
   }
   draw();
 }
 void loop() {
   M5.update();
+  bool settingsChanged=applyUiSettings();
+  bool lanChanged=xQueueReceive(lanUpdates,&lanStatus,0)==pdTRUE;
   for (size_t i=0;i<M5.Touch.getCount();++i) {
     const auto &touch=M5.Touch.getDetail(i);if(!touch.wasPressed()) continue;
     if(settingsOpen) settingsTouch(touch.x,touch.y);
@@ -1023,6 +1184,9 @@ void loop() {
     if(forecastPressed) {showForecast=!showForecast;saveDisplaySettings();}
   }
   bool received=xQueueReceive(updates,&ui,0)==pdTRUE;
+  if(received && ui.connectionEpoch!=uiEpoch) {
+    int64_t clock=ui.clockAt,mono=ui.monoAt;resetSnapshot(ui);ui.clockAt=clock;ui.monoAt=mono;ui.connectionEpoch=uiEpoch;received=false;rendered=false;
+  }
   if (received) {lastAppliedAt=millis();haveApplied=true;}
   bool dataChanged=received && payloadFingerprint()!=renderedPayload;
   static int64_t lastCheckedSecond=-1;
@@ -1033,7 +1197,7 @@ void loop() {
   if(settingsOpen) {
     static int previousPortal=-1,previousWifi=-1;
     int state=portalState.load(),wifi=int(WiFi.status());
-    if(state!=previousPortal || wifi!=previousWifi) {drawSettings();previousPortal=state;previousWifi=wifi;}
+    if(state!=previousPortal || wifi!=previousWifi || settingsChanged || lanChanged) {drawSettings();previousPortal=state;previousWifi=wifi;}
   } else {
     if(!rendered || dataChanged || timedChanged || forecastPressed) draw();
     else if(newSecond) drawLiveFields(now);

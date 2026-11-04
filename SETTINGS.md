@@ -1,56 +1,117 @@
-# Quick settings and Wi-Fi setup
+# Quick settings, saved Wi-Fi and LAN configuration
 
-Press bottom-center button B, shown with a cog icon. Back, A or B returns to
-the dashboard. The C forecast shortcut is inactive in the menu. The top-bar
-speaker remains at x174..199, y0..27; the clock retains seconds.
+Press bottom-center B (cog) to open settings. Back, A or B closes the menu;
+inside the Wi-Fi submenu they return to the main settings page. C is inactive
+while settings are open. The top speaker touch toggle remains available on the
+dashboard. Display settings save automatically.
 
-## Saved settings
+## Device menu
 
-History (1, 3, 6 or 12 hours), units, forecasts and sound persist across reboot.
-Saved choices override config.h defaults. The dashboard C forecast shortcut also saves
-its choice; units are changed inside this menu. Invalid saved timeframes fall back to a supported config
-default or three hours. Saving failures are reported on serial; session values
-remain active.
+- Graph history: 1, 3, 6 or 12 hours; a change requests a new poll.
+- Sound: master toggle for glucose-range and missing-update sounds.
+- Forecast: enable/disable the future pane.
+- Units: mg/dL or mmol/L.
+- Wi-Fi setup: reconnect saved networks or start a temporary recovery hotspot.
+- LAN portal: start/stop configuration service on TCP port 3000.
 
-A timeframe change requests a poll. The worker uses one timeframe for all
-requests in that cycle. Longer history fills after a successful fetch. The
-288-entry cap supports 12 hours of ordinary five-minute SGVs (144 readings).
-Faster/duplicate-heavy data can reach the cap; SGV history limited warns that
-older readings may be missing. Treatments retain the existing 200 fetched /
-128 retained bounds and limit warnings.
+## LAN portal: off by default
 
-## Wi-Fi
+1. Connect the Core2 to Wi-Fi, then choose B > LAN portal: On.
+2. Open the exact http://IP-ADDRESS:3000 address displayed on the Core2 from
+   another device on that LAN. The example address in previews is not your IP.
+3. Enter the eight-digit access code shown underneath the address.
+4. Edit Nightscout, Wi-Fi, or display/alert settings and choose Save settings.
+   Saving is explicit; Test connection does not save.
+5. Turn LAN portal Off on the device when finished. Closing the settings screen
+   leaves an enabled portal running. Every restart turns the portal off again.
 
-Reconnect saved Wi-Fi retries the saved network, or config.h when none is saved.
-It waits for the current fetch to finish. The menu shows the connected SSID or
-Disconnected.
+The service runs separately from polling. It stops listening when disabled or
+Wi-Fi is unavailable, and pauses while the recovery hotspot is active. Wi-Fi/IP
+changes or service restarts can produce a new code and require a new login.
+A current request may need to finish before its listener stops.
 
-To change networks:
+### Available configuration
 
-1. Choose Wi-Fi setup and wait for any current Nightscout fetch to finish.
-2. On your phone, join the Core2-Setup-xxxx hotspot using the random password
-   shown on the Core2. Stay connected despite its no-internet warning.
-3. Open http://192.168.4.1 if the captive page does not open automatically.
-4. Enter the exact 2.4 GHz SSID and password and choose Test and save. Passwords
-   may be 8-63 characters; an empty password selects an open network. Enterprise
-   Wi-Fi and 64-character raw WPA keys are unsupported.
-5. A connection test allows up to 20 seconds. Credentials replace the previous
-   saved record only after successful association and a successful save. Failure
-   allows retry from the phone. This tests Wi-Fi, not Internet or Nightscout.
-6. Success closes the hotspot and resumes Nightscout polling. Reconnect the phone
-   to its usual network. Back/button A or B cancels; setup times out after five minutes.
-   Cancel/timeout restores the previous credentials. Cancellation can take until
-   the current network attempt yields.
+Nightscout: canonical HTTPS URL, read-only subject access token, uploader filter,
+v3/default or explicit v1 mode, polling interval (30–900 seconds), and SGV/AAPS
+freshness (1–60 minutes). Blank token input preserves the saved token for the same URL. A changed URL
+requires explicitly entering the token for that address; an old credential is
+never silently carried to another destination. The actual
+token is never returned to the browser. Test connection validates TLS, auth and
+entries access; normal dashboard polling verifies the other endpoints. If a poll
+is running, testing returns a busy message; try again after the poll finishes.
 
-Nightscout fetching pauses during hotspot setup. Cached readings keep aging and
-enabled alerts continue. Normal polling continues while viewing other settings.
-The hotspot is password protected and permits one client. Setup requests are
-accepted only through its AP interface; DNS/HTTP servers stop when setup ends.
-The form uses local HTTP within the protected Wi-Fi network. Credentials are
-not logged or put in URLs. The Nightscout URL/token remain in config.h and are
-not exposed by this page.
+Wi-Fi: up to five exact SSIDs in priority order, passwords, explicit open-network
+selection, reorder and remove. Blank password preserves an existing network's
+secret; a new protected network requires an 8–63-character password. New open
+networks require the Open network checkbox. SSIDs are limited to 32 bytes.
+Enterprise networks and 64-character raw WPA keys are unsupported. Stored
+passwords are never sent back. The active connection is marked in the list.
 
-Wi-Fi credentials are stored as one bounded record in the ns-wifi Preferences
-namespace, separately from display settings in ns-display. Ordinary reflashing
-preserves them. Erasing all flash clears saved settings; re-upload firmware to
-return to config.h defaults. Device flash has no application-level encryption.
+Display/alerts: history, units, forecasts, master sound toggle, low/high alert and
+trace-color thresholds, volume, brightness, POSIX timezone and two NTP hosts.
+The background bands remain fixed at 70/180/249 mg/dL. Missing-update audio stays
+at the fixed ten-minute limit independently of displayed freshness settings.
+TLS verification stays enabled; the bundled CA roots still require a source
+update/rebuild if the server uses another CA.
+
+Saving a stale browser form is rejected if device settings changed after it was
+loaded; Reload saved settings before retrying. Values are validated before one
+complete profile replaces the prior profile. A failed save does not activate it.
+Changes to Nightscout URL/token/uploader/API invalidate old cached data and JWTs.
+
+### Network fallback
+
+After disconnection, the network task tries saved networks in order, allowing
+approximately ten seconds per network. It keeps a working backup connected;
+it does not interrupt it to probe the primary on each poll. Reconnect saved Wi-Fi
+retries from the top. This can change the IP and interrupt the browser connection.
+
+Adding/reordering Wi-Fi in the LAN portal saves it for the next reconnect. Save
+does not test association or immediately disconnect the working network. Keep a
+working backup. If all credentials fail, use the physical recovery hotspot.
+
+### Access and storage
+
+The portal uses an ephemeral code, HttpOnly/SameSite session cookie, per-session
+request token and same-origin/current-IP checks. Five incorrect code attempts
+cause a one-minute cooldown. Sessions expire after fifteen minutes of inactivity;
+Lock revokes the current session. Pages and API responses are marked no-store.
+Use the HTTP portal on a trusted LAN; its traffic is not HTTPS encrypted. Do not
+forward this configuration port to the Internet.
+
+The complete profile is stored in the ns-runtime Preferences namespace. Defaults
+come from config.h, ns_settings.h, display_settings.h and alerts.h. Existing
+ns-display and single-network ns-wifi settings migrate automatically; the old
+saved Wi-Fi becomes primary, and a distinct configured Wi-Fi remains a backup.
+After a profile is saved, it takes precedence over compiled defaults. Reflashing
+without erasing flash preserves it. Erasing all flash removes saved settings and
+requires re-uploading firmware. NVS has no application-level encryption.
+
+## Recovery hotspot
+
+B > Wi-Fi setup > Temporary setup hotspot starts the existing password-protected
+Core2-Setup-xxxx network, even when no saved network is reachable. Join it from
+a phone using the displayed password, then open http://192.168.4.1. Enter a
+2.4 GHz network and choose Test and save. A successful connection and save promotes
+that network to primary, retaining earlier networks as backups up to the cap.
+Failure keeps the previous list; Cancel/Back or a five-minute timeout closes
+setup and retries the saved list. The connection attempt can take up to twenty
+seconds. The hotspot form handles Wi-Fi only; configure Nightscout through the
+LAN portal after connecting.
+
+Normal Nightscout polling pauses during recovery setup. Cached readings continue
+aging and enabled alerts keep running. The LAN configuration service pauses too.
+The recovery server accepts requests only through its own AP interface and closes
+its DNS/HTTP services when setup ends.
+
+## History limits
+
+The 288-entry cap covers twelve hours of five-minute SGVs (144 readings). Faster
+or duplicate-heavy data can hit the cap and show SGV history limited. Treatments
+retain 200 fetched / 128 retained bounds with their existing limit warning.
+A longer window fills after a successful fetch; sparse history retains gaps.
+
+The settings screen temporarily uses at least brightness 20/255 so B can recover
+access even when the saved dashboard brightness is zero. Closing settings restores
+the configured brightness.

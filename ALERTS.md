@@ -1,63 +1,51 @@
-# Glucose, stale-data sounds and mute control
+# Glucose and missing-update sounds
 
-The built-in speaker plays one non-blocking 180 ms, 1800 Hz chirp at volume
-80/255 for a fresh out-of-range SGV, when alerts are enabled.
+The master speaker toggle (dashboard touch icon or settings) persists in the
+runtime profile and controls both sound types. Cyan means enabled; red slash means
+muted. Muting stops queued/current tones. Re-enabling re-arms the current glucose
+episode. Volume defaults to 80/255 and can be changed in the LAN portal.
 
-| Glucose | Behavior |
-| --- | --- |
-| Below 70 mg/dL | First-occurrence chirp; repeat every 15 minutes while fresh and low |
-| 70 through 180 inclusive | Silent; re-arm the next out-of-range episode |
-| Above 180 mg/dL | First-occurrence chirp; no repeat while high continues |
+## Glucose-range chirp
 
-A direct high-to-low or low-to-high transition chirps for the newly entered band.
-The sound thresholds are mg/dL regardless of display units. They are defined in
-`include/alerts.h`, separately from the display thresholds in config.h. That
-header also holds volume, tone length/frequency and low repeat interval.
+A fresh actual SGV below 70 or above 180 mg/dL defaults to a single non-blocking
+1800 Hz / 180 ms chirp. Low/high thresholds can be changed in the portal; they
+also control fresh trace/value colors. Defaults come from config.h, initially
+70/180. Thresholds always use mg/dL even when the display shows mmol/L.
 
-## Speaker touch toggle
+- Below low: first occurrence, then every fifteen minutes while fresh and low.
+- At either boundary or between them: silent and re-arm the next episode.
+- Above high: first occurrence only; no repeating high reminder.
+- A direct high-to-low or low-to-high transition chirps for the newly entered band.
 
-Tap the speaker icon just left of the power indicator. Cyan/blue means enabled;
-a red slash means muted. Muting stops an existing tone and blocks further chirps.
-The enabled setting is stored in ESP32 Preferences (`ns-display`, `alerts-on`)
-and restored after reboot; first use is enabled. If saving fails, serial reports
-it and the current session's setting still applies.
-
-Re-enabling re-arms the current episode: a fresh out-of-range reading chirps once
-immediately, and low repeats start from that chirp. Episode/timer history stays
-in RAM. After reboot with alerts enabled, a fresh out-of-range reading is a first
-occurrence and chirps once. Unit and forecast button preferences also persist through quick settings.
-
-## Freshness and timing
-
-Only the latest actual SGV is used. Forecasts, missing/invalid readings and stale
-data do not produce glucose-range chirps. Default SGV freshness is ten minutes. A failed fetch does not
-automatically invalidate a still-fresh cached sample; it keeps aging normally.
-A stale period/reconnect does not re-arm an already-announced high. A low reminder
-due while stale waits for fresh low data.
-
-Low timers use monotonic milliseconds, independent of NTP/timezone and safe
-across counter wrap. An alert is consumed only when the speaker accepts the tone.
-Failed requests retry at most every 30 seconds while the triggering reading is
-fresh. Parser-test firmware disables the speaker and does not change saved mute.
-
-These chirps supplement the secondary display and do not replace CGM/AAPS alerts.
-Current test/build evidence and remaining sound/touch checks are recorded in
-[VERIFICATION.md](VERIFICATION.md).
+Only the latest actual glucose sample is used. Missing, stale, invalid readings
+and forecasts do not produce range chirps. Fetch failure alone does not invalidate
+fresh cached SGV. A stale/reconnect period does not re-arm an announced high;
+a due low reminder waits for fresh low data. Changed thresholds or a changed
+Nightscout identity re-arm the range episode; switching sites clears old readings.
+Timers use monotonic milliseconds and handle wrap. A tone is consumed only after
+the speaker accepts it; failures retry at most once per thirty seconds.
 
 ## Missing-update sound
 
-With sound enabled, actual SGV or the AAPS calculation timestamp older than
-600 seconds triggers a descending two-note sound: 950 Hz for 160 ms, followed
-by 650 Hz for 160 ms, with approximately 140 ms of silence between notes.
-The threshold is strictly more than ten minutes and independent of display
-freshness configuration. BG and AAPS episodes are tracked separately; simultaneous
-staleness shares one sound. There are no periodic stale reminders. Each source
-re-arms when fresh data returns. Missing data receives a ten-minute startup grace;
-already received but old data can alert immediately. Fetch errors alone do not
-trigger this alert while timestamps remain fresh. Calculation time, not upload
-time, determines AAPS freshness.
+Actual SGV or the AAPS calculation timestamp strictly older than 600 seconds
+triggers two descending notes: 950 Hz / 160 ms, about 140 ms silence, then
+650 Hz / 160 ms. This differs from the single, higher glucose chirp. Each source
+sounds once per stale episode, re-arming only when fresh data returns. Both
+becoming stale together share one sound. There are no periodic stale reminders.
 
-The speaker toggle mutes both kinds of alert, stops playback and re-arms stale
-notifications on enabling. Playback is non-blocking and serialized with glucose
-chirps. Failed tone scheduling retries after 30 seconds; an episode is consumed
-only when the second note is accepted. State is in RAM and resets on reboot.
+A source with no data gets a ten-minute startup grace. Received but already-old
+data can alert immediately. Fetch errors do not trigger this while timestamps
+remain fresh. AAPS uses calculation time, not upload time. This audio threshold
+stays at ten minutes even if portal display-freshness settings are changed.
+
+Sounds are non-blocking and serialized. Playback failure retries after thirty
+seconds. Stale episodes are acknowledged after the second note is accepted.
+The master toggle stops/suppresses them and re-arms notifications on enabling.
+Cached values and alerts continue aging/running while recovery Wi-Fi setup pauses
+polling; normal LAN portal viewing does not pause polls.
+
+Episode/timer state is RAM-only and resets on reboot. Saved sound, volume, units,
+forecasts and other preferences live in ns-runtime; old sound preferences migrate.
+Fixture firmware disables the speaker and does not change saved preferences.
+These sounds supplement the display and do not replace CGM/AAPS alerts.
+See [VERIFICATION.md](VERIFICATION.md) for testing and hardware limitations.

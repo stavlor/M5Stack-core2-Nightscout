@@ -9,7 +9,7 @@
 | Gray dot, B1 | 1 U of another reported bolus |
 
 Markers sit inside the graph near its bottom edge; compact labels are
-below the graph in one carb row and two insulin rows. Cyan SMB labels omit the S prefix;
+below the graph in one carb row and up to two insulin rows. Cyan SMB labels omit the S prefix;
 units are indicated by the SMB U legend. Labels use measured text widths and can
 shift slightly with a connector to their timestamp marker. Trailing decimal zeros
 are removed and up to two decimals retained.
@@ -75,4 +75,10 @@ Five-minute spacing is described in the [OpenAPS glossary](https://github.com/op
 See [V3.md](V3.md) for requests and [VERIFICATION.md](VERIFICATION.md) for evidence.
 
 Forecasts use the automatic SGV history scale. Off-scale forecast portions are
-clipped with a FCAST CLIPPED legend warning; predictions do not stretch that scale.
+clipped with CLIP in the header and an asterisk beside the compact forecast legend;
+predictions do not stretch that scale.
+
+Graph focus reserves a second insulin-label row only if measured SMB groups or
+placed manual-bolus labels use it. The chart then ends at y152; otherwise it
+extends to y162. Timestamp markers and group totals retain their meaning as
+height changes. Only available forecast curves appear in the single legend row.

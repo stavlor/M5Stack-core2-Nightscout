@@ -32,10 +32,10 @@ public:
     enabled=value;
     if (enabled) {band=Event::None;announced=false;}
   }
-  Event poll(float mgdl,bool fresh,uint32_t tick) {
+  Event poll(float mgdl,bool fresh,uint32_t tick,float low=LOW_MGDL,float high=HIGH_MGDL) {
     // Missing/stale samples suppress sound without re-arming the episode.
     if (!enabled || !fresh || !std::isfinite(mgdl) || mgdl<20 || mgdl>600) return Event::None;
-    Event next=mgdl<LOW_MGDL?Event::Low:mgdl>HIGH_MGDL?Event::High:Event::None;
+    Event next=mgdl<low?Event::Low:mgdl>high?Event::High:Event::None;
     if (next!=band) {band=next;announced=false;}
     if (band==Event::None) return Event::None;
     if (!announced) return band;
