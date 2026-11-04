@@ -1,6 +1,6 @@
 # Nightscout / AAPS dashboard for M5Stack Core2 v1.3
 
-Current source: 2026-11-04 — Graph focus and LAN configuration candidate.
+Current source: 2026-11-04 â€” Graph focus and LAN configuration candidate.
 
 Read-only, validated HTTPS Nightscout v3 dashboard with glucose/trend/history,
 OpenAPS forecasts, treatment markers, IOB/COB, basal/pump state, clock, power,
@@ -77,7 +77,7 @@ include/ns_settings.h, include/display_settings.h and include/alerts.h. Runtime
 profile settings are managed by the portal and device menu; see SETTINGS.md for
 limits, migration and storage behavior. Portal enablement itself is not saved.
 
-History supports 1/3/6/12 hours; polls default to 60 seconds and allow 30–900.
+History supports 1/3/6/12 hours; polls default to 60 seconds and allow 30â€“900.
 Freshness defaults to ten minutes. Glucose bodies are bounded at 192 KiB, data
 JSON at 64 KiB/nesting 16. Entries retain up to 288 points, treatments 128 from
 up to 200 fetched records. At the entry cap an SGV history limited warning may
@@ -127,8 +127,8 @@ The 153 C++ fixtures and preceding trust-adapter firmware built successfully on
 the user's workstation. Device diagnostics then identified signature=-16:
 MBEDTLS_ERR_MPI_ALLOC_FAILED during intermediate verification. This candidate
 installs a PSRAM-preferred TLS allocator before workers start, with internal
-RAM fallback and unchanged certificate validation. Its ESP32 build and device
-result remain pending. Python bundle/flash-tool checks and Node portal/key
+RAM fallback and unchanged certificate validation. The user built/flashed it successfully and reported a faster successful initial
+fetch; extended stability testing remains in progress. Python bundle/flash-tool checks and Node portal/key
 checks are independent of hardware. See VERIFICATION.md for current evidence.
 
 ```text

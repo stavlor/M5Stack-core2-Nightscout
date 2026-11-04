@@ -64,5 +64,6 @@ missing issuer. The pinned SDK confines TLS to internal RAM. The project now
 installs PSRAM-preferred calloc/free hooks once after hardware initialization
 and before networking starts, with internal RAM fallback. Both allocation paths
 are zero-filled and use heap_caps_free; overflow is rejected. This is a memory
-policy change, not a certificate-verification exception. Device validation of
-this change is pending. Startup logs identify the allocator and PSRAM free size.
+policy change, not a certificate-verification exception. The user built/flashed
+this change and reported a faster successful initial fetch. Extended stability
+testing remains in progress. Startup logs identify the allocator and PSRAM free size.

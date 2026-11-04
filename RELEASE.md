@@ -1,4 +1,4 @@
-# Source candidate: Graph focus / LAN portal, 2026-11-04
+# Source release: Graph focus / LAN portal / TLS memory, 2026-11-04
 
 This bundle includes full PlatformIO source, portable build/flash helpers,
 configuration example, TLS roots, regression fixtures, documentation and MIT
@@ -67,7 +67,8 @@ The 153-fixture trust-adapter firmware built on the user's workstation, but
 intermittent device failures remained. New diagnostics identify signature=-16
 (MBEDTLS_ERR_MPI_ALLOC_FAILED). This candidate moves TLS allocations from the
 SDK's internal-only policy to PSRAM preference with internal fallback. Validation
-stays required. This allocation change still needs a local build/device test;
+stays required. The user built/flashed this allocation change and reported a faster successful
+initial fetch; extended stability testing is ongoing;
 existing release ZIPs are not automatically updated and contain no configured image.
 
 The portable helper's 14 isolated Python tests and the actual embedded portal

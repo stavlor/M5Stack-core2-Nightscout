@@ -13,7 +13,8 @@ Reviewed 2026-11-04 for the Graph focus / LAN portal source candidate.
   mbedtls_platform_set_calloc_free hooks once after M5 initialization and before
   workers start, preferring PSRAM with internal fallback. Overflow is checked,
   allocation is zero-filled, and both regions use heap_caps_free. No validation
-  failures are waived. The allocator change needs a fresh device build/test.
+  failures are waived. The user built/flashed the allocator change and reported a faster successful
+  initial fetch. Extended stability testing remains in progress.
 - Three offline CA tests and independent Node/OpenSSL checks of all 118 root
   public keys pass. The cross-signed GTS root fixture matches its trusted key.
 - Earlier portable flash-helper tests (14) and embedded portal-controller tests
@@ -54,7 +55,7 @@ small Arduino loop stack. It starts no Wi-Fi, tones or saved-preference writes.
 Pinned: espressif32 6.12.0, m5stack-core2, Arduino ESP32 2.0.17, M5Unified 0.2.28,
 M5GFX 0.2.35, ArduinoJson 6.21.5. WebServer/DNSServer/Preferences/Wi-Fi/TLS and
 FreeRTOS come from that framework. PSRAM remains enabled. No new external
-library is needed. Core2 v1.3 uses AXP192, CH9102 USB serial and 320×240 LCD.
+library is needed. Core2 v1.3 uses AXP192, CH9102 USB serial and 320Ã—240 LCD.
 Installed headers confirm baseline_right, FreeSansBold12pt7b, collected-header
 array API, AP lifecycle and client local-IP methods used by the implementation.
 
