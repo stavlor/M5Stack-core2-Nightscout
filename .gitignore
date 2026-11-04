@@ -9,3 +9,7 @@ __pycache__/
 parser-tests
 parser-tests.exe
 .DS_Store
+
+*.piobkp
+
+!certs/x509_crt_bundle.bin

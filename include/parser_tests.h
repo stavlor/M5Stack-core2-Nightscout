@@ -9,6 +9,8 @@
 #include "graph_scale.h"
 #include "quick_settings.h"
 #include "runtime_settings.h"
+#include "tls_diagnostics.h"
+#include "tls_anchor_policy.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
@@ -389,6 +391,26 @@ inline int runParserTests() {
     alerts::State custom;
     check(custom.poll(75,true,0,80,190)==alerts::Event::Low && custom.poll(185,true,1,80,190)==alerts::Event::None,
       "Portal alert thresholds affect actual glucose alerts consistently");
+  }
+  {
+    check(!strcmp(tlsdiagnostics::message(0x8),"TLS CA/chain untrusted"),"TLS diagnostics distinguish untrusted chain");
+    check(!strcmp(tlsdiagnostics::message(0x4|0x8),"TLS hostname mismatch"),"TLS hostname failure remains explicit with multiple flags");
+    check(!strcmp(tlsdiagnostics::message(0x1|0x200),"TLS cert date/clock invalid"),"TLS certificate dates are distinguished from trust errors");
+    check(!strcmp(tlsdiagnostics::message(0x10000),"TLS certificate algorithm/key"),"TLS algorithm failures are not mislabeled as missing roots");
+    check(!strcmp(tlsdiagnostics::message(0x40),"TLS peer certificate missing"),"TLS diagnostics identify missing peer certificates");
+    check(!strcmp(tlsdiagnostics::message(0),"TLS verify: flags unavailable") && !strcmp(tlsdiagnostics::message(0xffffffffu),"TLS verify: flags unavailable"),
+      "Unavailable TLS verification state is not interpreted as all failures");
+  }
+  {
+    using Action=tlsanchors::Action;
+    check(tlsanchors::action(0x8,true)==Action::AcceptAnchor,"Exact root subject and key can anchor a cross-signed presentation");
+    check(tlsanchors::action(0x8|0x1,true)==Action::PreserveFailure && tlsanchors::action(0x8|0x200,true)==Action::PreserveFailure,"Trusted root identity cannot waive certificate date failures");
+    check(tlsanchors::action(0x8|0x4,true)==Action::PreserveFailure,"Trusted root identity cannot waive hostname mismatch");
+    check(tlsanchors::action(0x8|0x800,true)==Action::PreserveFailure,"Root anchoring preserves key-usage constraints");
+    check(tlsanchors::action(0x8|0x4000,true)==Action::AcceptAnchor && tlsanchors::action(0x8|0x4000,false)==Action::PreserveFailure,"Weak self/cross signature exception applies only to an exact anchor");
+    check(tlsanchors::action(0x8,false)==Action::CheckIssuer,"Unknown root identity still requires verified issuer signature");
+    const unsigned char key1[]={1,2,3},key2[]={1,2,4};
+    check(tlsanchors::sameKey(key1,3,key1,3) && !tlsanchors::sameKey(key1,3,key2,3) && !tlsanchors::sameKey(key1,2,key1,3) && !tlsanchors::sameKey(key1,0,key1,0),"Trust requires exact nonempty public-key bytes, not subject name alone");
   }
   Serial.printf("RESULT: %u passed, %u failed\n",passed,failed);
   return failed?1:0;

@@ -19,9 +19,14 @@ Bundle: complete PlatformIO source, example config, CA roots, documentation,
 portable Windows/Python flash tools, fixtures and SHA-256 manifests. Private
 config, caches, logs and configured firmware binaries are excluded.
 
-Validation: previous 104 C++ host checks passed in the saved workstation log;
-36 new cases bring the current suite to 140 but remain unrun because the compiler
-cannot launch in this session. Portable helper Python tests and embedded portal
-controller Node checks pass. No fresh firmware binary is included or claimed.
-Run the fixtures/build locally and complete the device checks in VERIFICATION.md
-before treating this candidate as validated on hardware.
+TLS follow-up: the three-root change did not eliminate device verification
+failures. This candidate uses all 118 public roots from Mozilla/certifi 2026.10.23
+through the ESP32 indexed-bundle API, and records exact verification flags plus
+UTC/internal heap on failure. No insecure fallback is enabled. The source PEM,
+indexed CA data, metadata, generator and upstream license are included.
+
+Validation: 153 C++ fixtures and the preceding adapter build passed on the user's
+PC. Device diagnostics now show signature=-16 (MPI allocation failure), despite
+finding the trusted issuer. This source candidate installs PSRAM-preferred TLS
+allocation before worker startup, with internal fallback. Build/device validation
+of that memory change is pending. Certificate checks remain required.

@@ -1,6 +1,8 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include "secure_client.h"
+#include "ca_bundle_info.h"
 #include <HTTPClient.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
@@ -32,7 +34,7 @@
 #include "parser_tests.h"
 #endif
 
-extern const uint8_t rootStart[] asm("_binary_certs_root_ca_pem_start");
+extern const uint8_t caBundleStart[] asm("_binary_certs_x509_crt_bundle_bin_start");
 static_assert(cfg::GRAPH_HOURS>=1 && cfg::GRAPH_HOURS<=12,"Graph hours must be 1..12");
 static_assert(cfg::POLL_SECONDS>=30,"Poll no faster than 30 seconds");
 struct Snapshot {
@@ -193,6 +195,16 @@ void authFailure(const char *message) {
   jwt="";jwtExpiry=0;authCooling=true;authFailedAt=millis();
   strlcpy(lastAuthError,message,sizeof(lastAuthError));
 }
+void tlsFailure(SecureClient &tls,const char *label,int httpCode,char *error,size_t cap) {
+  char detail[160]={};int code=tls.lastError(detail,sizeof(detail));uint32_t flags=tls.verificationFlags();
+  if(flags || code==MBEDTLS_ERR_X509_CERT_VERIFY_FAILED)strlcpy(error,tlsdiagnostics::message(flags),cap);
+  else if(code<0)snprintf(error,cap,"TLS error -0x%04X",unsigned(-code));
+  else snprintf(error,cap,"Network error %d",httpCode);
+  Serial.printf("%s HTTP-client=%d TLS=%d verify=0x%08lX %s; UTC=%lld free=%u largest=%u roots=%u verifier=anchors\n",
+    label,httpCode,code,(unsigned long)flags,detail,(long long)time(nullptr),
+    unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)),
+    unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)),unsigned((caBundleStart[0]<<8)|caBundleStart[1]));
+}
 bool ensureJwt(char *error,size_t cap) {
   int64_t now=time(nullptr);
   if (!nsapi::renewNeeded(jwt.length()>0,jwtExpiry,now)) return true;
@@ -201,7 +213,7 @@ bool ensureJwt(char *error,size_t cap) {
   }
   auto fail=[&](const char *message){authFailure(message);strlcpy(error,message,cap);return false;};
   if (now<1767225600) return fail("V3 auth needs valid clock");
-  WiFiClientSecure tls;tls.setCACert(reinterpret_cast<const char*>(rootStart));tls.setHandshakeTimeout(12);
+  SecureClient tls(caBundleStart);
   HTTPClient http;http.setUserAgent("ESP32HTTPClient");http.setConnectTimeout(10000);http.setTimeout(20000);http.setReuse(false);
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   // This standard NS endpoint necessarily carries the subject token in its
@@ -211,9 +223,10 @@ bool ensureJwt(char *error,size_t cap) {
   http.addHeader("Accept","application/json");http.addHeader("Accept-Encoding","identity");
   int code=http.GET();
   if (code!=200) {
-    http.end();char message[48];
-    if (code<0) snprintf(message,sizeof(message),"Auth TLS/network %d",code);
+    char message[48];
+    if(code<0)tlsFailure(tls,"Auth",code,message,sizeof(message));
     else snprintf(message,sizeof(message),"Auth HTTP %d",code);
+    http.end();
     return fail(message);
   }
   constexpr size_t maxAuth=8192;
@@ -237,9 +250,7 @@ bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char
   if (netSettings.v3 && !ensureJwt(error,cap)) return false;
   const bool glucose=resource==Resource::Glucose;
   const char *label=glucose?"SGV":resource==Resource::Status?"AAPS":"Treatments";
-  WiFiClientSecure tls;
-  tls.setCACert(reinterpret_cast<const char*>(rootStart));
-  tls.setHandshakeTimeout(12);
+  SecureClient tls(caBundleStart);
   HTTPClient http;
   http.setUserAgent("ESP32HTTPClient");
   http.setConnectTimeout(10000);
@@ -261,14 +272,7 @@ bool fetch(const String &path, Resource resource, Snapshot &s, int64_t now, char
   bool ok=false;
   if (code!=200) {
     if (code<0) {
-      char detail[160]={};
-      int tlsCode=tls.lastError(detail,sizeof(detail));
-      if (tlsCode==-0x2700) strlcpy(error,"TLS verify: CA/time/hostname",cap);
-      else if (tlsCode<0) snprintf(error,cap,"TLS error -0x%04X",unsigned(-tlsCode));
-      else snprintf(error,cap,"Network error %d",code);
-      // No URL, headers, token or response body in diagnostic output.
-      Serial.printf("%s HTTP-client=%d TLS=%d %s; UTC=%lld\n",
-        label,code,tlsCode,detail,(long long)time(nullptr));
+      tlsFailure(tls,label,code,error,cap);
     }
     else snprintf(error,cap,"HTTP %d%s",code,(code==401 || code==403)?" check read token":"");
   } else if (http.getSize()>int(Body::limit)) strlcpy(error,"Response too large",cap);
@@ -452,13 +456,14 @@ bool testNightscoutConnection(const runtimecfg::Settings &settings,char *error,s
   if(time(nullptr)<1767225600) {strlcpy(error,"Wait for a valid NTP clock before testing HTTPS",cap);return false;}
   String accessToken;
   auto get=[&](const String &path,Body &body,bool authenticate) {
-    WiFiClientSecure tls;tls.setCACert(reinterpret_cast<const char*>(rootStart));tls.setHandshakeTimeout(12);
+    SecureClient tls(caBundleStart);
     HTTPClient http;http.setUserAgent("ESP32HTTPClient");http.setConnectTimeout(10000);http.setTimeout(20000);http.setReuse(false);
     http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
     if(!http.begin(tls,String(settings.url)+path)) return -1;
     http.addHeader("Accept","application/json");http.addHeader("Accept-Encoding","identity");
     if(authenticate) {if(settings.v3)http.addHeader("Authorization","Bearer "+accessToken);else http.addHeader("api-secret",settings.token);}
     int code=http.GET();
+    if(code<0)tlsFailure(tls,"Portal-test",code,error,cap);
     if(code==200) {int got=http.writeToStream(&body);int expected=http.getSize();if(got<0 || body.buffer.overflow || (expected>=0 && got!=expected))code=-2;}
     http.end();return code;
   };
@@ -1144,6 +1149,15 @@ void setup() {
 #endif
   M5.begin(c); M5.Display.setRotation(1); M5.Display.setBrightness(cfg::BRIGHTNESS);
   Serial.begin(115200);
+  // Install once, before either worker can create a TLS context.
+  if(!project_tls_memory_init()) {
+    Serial.println("TLS memory allocator initialization failed");
+    line(20,"TLS memory setup failed",TFT_RED);for(;;)delay(1000);
+  }
+  Serial.printf("TLS memory: PSRAM preferred, free=%u internal=%u\n",
+    unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)),
+    unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)));
+  Serial.printf("TLS trust: Mozilla/certifi %s roots=%u verifier=root-key-anchors bundle=%s\n",CA_BUNDLE_SOURCE_VERSION,unsigned((caBundleStart[0]<<8)|caBundleStart[1]),CA_BUNDLE_SHA256);
   M5.Speaker.setVolume(alerts::VOLUME);
 #ifdef RUN_PARSER_TESTS
   if(xTaskCreatePinnedToCore([](void*) {runParserTests();vTaskDelete(nullptr);},"parser-tests",49152,nullptr,1,nullptr,1)!=pdPASS)

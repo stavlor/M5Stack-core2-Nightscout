@@ -36,7 +36,7 @@ an already saved profile; edit it in the portal or erase flash and re-upload.
 
 See [RELEASE.md](RELEASE.md) for portable flashing options and checksums.
 The workstation-specific helper in the surrounding outputs directory remains
-available locally: it runs the current 140 C++ host fixtures before building and
+available locally: it runs the current 153 C++ host fixtures before building and
 uploading to COM3. The portable helper runs normal PlatformIO builds; it does not
 automatically run desktop C++ fixtures.
 
@@ -61,9 +61,12 @@ treatment and device-status uploads there. Set the exact AAPS device filter when
 multiple uploaders share a site; only two newest status documents are searched.
 
 V3 is the default. It exchanges the subject token for a RAM-only JWT over HTTPS.
-The ISRG Root X1 / GTS Root R4 bundle validates chain, hostname and time. Redirects,
-insecure TLS and plain HTTP Nightscout URLs are rejected. A different server CA
-requires updating certs/root-ca.pem from a trusted source, then rebuilding.
+The complete Mozilla/certifi 2026.10.23 snapshot (118 public roots) is embedded
+using the ESP32 indexed CA-bundle API. Chain, hostname and time checks remain
+active; redirects, plain HTTP Nightscout and insecure fallback are rejected.
+See [certs/README.md](certs/README.md) for source, licensing and reproducible
+updates. Public leaf renewals normally need no root change. A private/custom CA
+requires an explicit root addition and regeneration/rebuild.
 NTP must work for TLS; defaults use pool.ntp.org/time.cloudflare.com. No profile
 or prediction calculations run locally. Values describe uploaded snapshots.
 
@@ -120,17 +123,25 @@ python -m unittest discover -s test -p test_flash_tool.py -v
 node test/test_portal_frontend.cjs
 ```
 
-The current 140 C++ checks include 36 new runtime-settings/access cases. The prior
-104-check host log passed; the new cases and firmware compile remain pending
-because compiler executables cannot launch in the authoring session. Python
-flashing-tool and Node portal-controller checks run independently of a device.
-See VERIFICATION.md for exact evidence; this candidate is not a precompiled image.
+The 153 C++ fixtures and preceding trust-adapter firmware built successfully on
+the user's workstation. Device diagnostics then identified signature=-16:
+MBEDTLS_ERR_MPI_ALLOC_FAILED during intermediate verification. This candidate
+installs a PSRAM-preferred TLS allocator before workers start, with internal
+RAM fallback and unchanged certificate validation. Its ESP32 build and device
+result remain pending. Python bundle/flash-tool checks and Node portal/key
+checks are independent of hardware. See VERIFICATION.md for current evidence.
+
+```text
+python -m unittest discover -s test -p test_ca_bundle.py -v
+node test/test_ca_bundle_node.cjs
+```
 
 ## Troubleshooting
 
 - Wi-Fi offline: reconnect saved networks or use the recovery hotspot.
 - Auth/401/403: check subject token, endpoint rights, API mode and proxy rules.
-- TLS/time failure: check NTP, canonical hostname, CA/intermediate chain.
+- TLS failure: capture the TLS anchor failure line and verify=0x... serial fields. The
+  footer now distinguishes date, hostname, trust and algorithm failures.
 - Missing AAPS: check uploader filter, fields and calculation timestamps.
 - Limited history/body error: reduce history hours and note the serial size/code.
 - Portal unavailable: enable it on the device, use its current IP with :3000 and

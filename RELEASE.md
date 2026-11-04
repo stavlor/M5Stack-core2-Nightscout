@@ -63,12 +63,12 @@ and requires uploading the firmware again.
 
 ## Verification status
 
-The previous observed workstation C++ log had 104 passed, zero failed. The current
-suite has 140 fixtures, including 36 new settings/access cases, but those additions
-and this firmware could not compile in the authoring session because compiler
-executables cannot launch. This source candidate includes no fresh firmware image
-and is not claimed hardware-validated. Complete the build and device checks in
-VERIFICATION.md before promoting it as a tested release.
+The 153-fixture trust-adapter firmware built on the user's workstation, but
+intermittent device failures remained. New diagnostics identify signature=-16
+(MBEDTLS_ERR_MPI_ALLOC_FAILED). This candidate moves TLS allocations from the
+SDK's internal-only policy to PSRAM preference with internal fallback. Validation
+stays required. This allocation change still needs a local build/device test;
+existing release ZIPs are not automatically updated and contain no configured image.
 
 The portable helper's 14 isolated Python tests and the actual embedded portal
 controller's Node checks pass. These do not replace C++ or ESP32 tests. They can
@@ -77,6 +77,8 @@ be run locally without connecting a device:
 ```text
 python -m unittest discover -s test -p test_flash_tool.py -v
 node test/test_portal_frontend.cjs
+node test/test_ca_bundle_node.cjs
+python -m unittest discover -s test -p test_ca_bundle.py -v
 ```
 
 The portable helper invokes a normal PlatformIO production build. Desktop C++
@@ -90,3 +92,8 @@ firmware and config.h contain private credentials and must not be published.
 Dependencies retain their own licenses and are fetched separately.
 
 Node 18+ is optional and is only needed for the portal browser-controller tests.
+
+Three offline CA checks pin the reviewed source snapshot, reproduce every binary
+record and reject malformed/truncated data. The optional Node check independently
+verifies all 118 embedded keys against the source certificates. The CA .bin file
+is public trust data; it is not a firmware image. See certs/README.md.

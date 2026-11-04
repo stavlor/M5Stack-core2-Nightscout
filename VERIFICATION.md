@@ -4,26 +4,26 @@ Reviewed 2026-11-04 for the Graph focus / LAN portal source candidate.
 
 ## Current evidence
 
-| Area | Result | Limit |
-| --- | --- | --- |
-| Previous C++ host suite | Latest saved workstation log: 104 passed, 0 failed | Predates this candidate |
-| Current C++ suite | 140 checks prepared; 36 new runtime/access cases | Cannot execute compiler here; new cases unrun |
-| ESP32 production build attempt | Pinned platform/libraries resolved; compiler and object converter could not execute | No new firmware binary or compiler diagnostics for this source |
-| Portable flash helper | 14 isolated Python tests passed | Does not invoke a real device/compiler in these tests |
-| Embedded portal controller | Node checks passed against the actual embedded script | DOM/HTTP mocks; does not test the ESP32 HTTP server/radio |
-| Source audit | Delimiter balance, portal IDs/references, pinned header APIs checked | Not a substitute for C++ compilation |
-
-The host compiler launch fails with Windows Illegal System DLL Relocation in this
-session. PlatformIO reaches compilation but Windows cannot execute the compiler
-or PEM object converter. Run the local Flash-Core2.cmd to compile/run all 140 host
-fixtures before building/uploading. The portable release helper runs a normal
-PlatformIO production build; desktop fixture checks are separate.
-
-Older .bin/.elf files and older successful build figures are historical. They
-do not validate this candidate and are not bundled. No live Nightscout request
-was made as part of this update. Earlier user-approved v3 checks established
-point-in-time compatibility: auth succeeded, entries/device-status/treatments
-returned HTTP 200, and validated TLS succeeded with the included CA bundle.
+- User workstation: 153 C++ fixtures passed and preceding trust-adapter firmware
+  built/flashed. Radio/TLS/touch/speaker behavior is not emulated by host tests.
+- Intermittent device failures remain. Latest diagnostic: depth=1, flags=0x8,
+  ready=1, issuer=1, signature=-16. The pinned bignum.h defines -16 as
+  MBEDTLS_ERR_MPI_ALLOC_FAILED. Post-cleanup heap figures do not measure peak demand.
+- The pinned SDK uses CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC. This candidate installs
+  mbedtls_platform_set_calloc_free hooks once after M5 initialization and before
+  workers start, preferring PSRAM with internal fallback. Overflow is checked,
+  allocation is zero-filled, and both regions use heap_caps_free. No validation
+  failures are waived. The allocator change needs a fresh device build/test.
+- Three offline CA tests and independent Node/OpenSSL checks of all 118 root
+  public keys pass. The cross-signed GTS root fixture matches its trusted key.
+- Earlier portable flash-helper tests (14) and embedded portal-controller tests
+  passed; these are independent of the current allocator change.
+- Prior PC-only RSA/ECDSA probes did not establish device reliability. The
+  earlier three-root fix and full-store change alone did not resolve all failures.
+- The agent session cannot execute the native compiler; actual firmware builds
+  are performed using the user's local Flash-Core2.cmd helper. No configured
+  firmware is included in the source release. Existing ZIPs are not refreshed
+  automatically by editing this source.
 
 ## New regression cases
 
@@ -92,14 +92,22 @@ Actual font metrics, label collisions and treatment density need screen review.
 | --- | --- |
 | ISRG Root X1 | 96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6 |
 | GTS Root R4 | 349dfa4058c5e263123b398ae795573c4e1313c83fe68f93556cd5e8031b3c7d |
+| GTS Root R1 | d947432abde7b7fa90fc2e6b59101b1280e0e1c7e4e40fa3c6887fff57a7f4cf |
 
-The root bundle is unchanged. HTTPS chain/hostname/time validation and redirect
-rejection remain enabled. JWTs remain in RAM; the saved read-only subject token
+The original two anchors remain. GTS Root R1 was obtained from Google's official
+[PEM](https://pki.goog/repo/certs/gtsr1.pem) and
+[DER](https://pki.goog/repo/certs/gtsr1.der) downloads; both matched each other and
+the installed independent certifi copy. Source PEM was normalized to remove NUL
+terminators left by aborted PlatformIO embedding. The TLS loader sees all three
+roots, not just the original two. Three offline checks guard pins, text format
+and complete root loading. Packaging rejects hidden terminators or missing roots.
+HTTPS chain/hostname/time validation and redirect rejection remain enabled. JWTs remain in RAM; the saved read-only subject token
 is in the private runtime profile. No response bodies or secrets are logged.
 
 ## Remaining device acceptance
 
-Compile and run all 140 C++ fixtures, then build production. Confirm migration
+Rebuild/reflash the CA update and monitor repeated SGV/AAPS/treatment polls,
+including both certificate paths. Confirm migration
 from existing settings, normal/reboot preference persistence and portal OFF after
 restart. Check the address/code display, login limits, session expiry, secret
 preservation, API rejection of stale revisions/incorrect origin/CSRF and closure

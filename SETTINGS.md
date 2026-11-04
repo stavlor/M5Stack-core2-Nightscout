@@ -52,8 +52,8 @@ Display/alerts: history, units, forecasts, master sound toggle, low/high alert a
 trace-color thresholds, volume, brightness, POSIX timezone and two NTP hosts.
 The background bands remain fixed at 70/180/249 mg/dL. Missing-update audio stays
 at the fixed ten-minute limit independently of displayed freshness settings.
-TLS verification stays enabled; the bundled CA roots still require a source
-update/rebuild if the server uses another CA.
+TLS verification stays enabled; the Mozilla CA snapshot still requires a reviewed source update/rebuild for
+new trust anchors or a private CA. See certs/README.md.
 
 Saving a stale browser form is rejected if device settings changed after it was
 loaded; Reload saved settings before retrying. Values are validated before one
