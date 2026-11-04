@@ -1,14 +1,14 @@
 # Quick settings and Wi-Fi setup
 
-Tap the cog just left of the speaker. Its touch area is x148..173, y0..27;
-the speaker begins at x174. Back or button A returns to the dashboard. B/C
-shortcuts are inactive in the menu. The clock retains seconds.
+Press bottom-center button B, shown with a cog icon. Back, A or B returns to
+the dashboard. The C forecast shortcut is inactive in the menu. The top-bar
+speaker remains at x174..199, y0..27; the clock retains seconds.
 
 ## Saved settings
 
 History (1, 3, 6 or 12 hours), units, forecasts and sound persist across reboot.
-Saved choices override config.h defaults. The dashboard B/C shortcuts now save
-their choices too. Invalid saved timeframes fall back to a supported config
+Saved choices override config.h defaults. The dashboard C forecast shortcut also saves
+its choice; units are changed inside this menu. Invalid saved timeframes fall back to a supported config
 default or three hours. Saving failures are reported on serial; session values
 remain active.
 
@@ -38,7 +38,7 @@ To change networks:
    saved record only after successful association and a successful save. Failure
    allows retry from the phone. This tests Wi-Fi, not Internet or Nightscout.
 6. Success closes the hotspot and resumes Nightscout polling. Reconnect the phone
-   to its usual network. Back/button A cancels; setup times out after five minutes.
+   to its usual network. Back/button A or B cancels; setup times out after five minutes.
    Cancel/timeout restores the previous credentials. Cancellation can take until
    the current network attempt yields.
 

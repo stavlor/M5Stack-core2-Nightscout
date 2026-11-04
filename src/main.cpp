@@ -612,14 +612,38 @@ void glucoseSegment(int x1,int y1,float v1,int x2,int y2,float v2,bool fresh) {
       y1+(y2-y1)*i/std::max(1,steps),glucoseColor(v1+(v2-v1)*part,fresh));
   }
 }
-void drawSettingsCog() {
-  const int x=164,y=7;const uint16_t color=TFT_LIGHTGREY;
-  M5.Display.drawCircle(x,y,4,color);M5.Display.drawCircle(x,y,1,color);
+void drawSettingsCog(int x,int y) {
+  const uint16_t color=TFT_LIGHTGREY;
+  M5.Display.drawCircle(x,y,3,color);M5.Display.drawCircle(x,y,1,color);
   for(int i=0;i<8;++i) {
     float a=i*0.78539816f;
-    M5.Display.drawLine(x+int(std::lround(4*std::cos(a))),y+int(std::lround(4*std::sin(a))),
-      x+int(std::lround(6*std::cos(a))),y+int(std::lround(6*std::sin(a))),color);
+    M5.Display.drawLine(x+int(std::lround(3*std::cos(a))),y+int(std::lround(3*std::sin(a))),
+      x+int(std::lround(5*std::cos(a))),y+int(std::lround(5*std::sin(a))),color);
   }
+}
+void drawFooterControls() {
+  M5.Display.setFont(&fonts::Font0);M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
+  M5.Display.setCursor(38,231);M5.Display.print("A");
+  M5.Display.setCursor(145,231);M5.Display.print("B");
+  M5.Display.setCursor(243,231);M5.Display.print("C");
+  // Circular refresh arrow, drawn directly to avoid missing font glyphs.
+  const int cx=53,cy=234;
+  for(int i=0;i<15;++i) {
+    float a=(45+i*18)*0.017453293f,b=(45+(i+1)*18)*0.017453293f;
+    M5.Display.drawLine(cx+int(std::lround(4*std::cos(a))),cy+int(std::lround(4*std::sin(a))),
+      cx+int(std::lround(4*std::cos(b))),cy+int(std::lround(4*std::sin(b))),TFT_LIGHTGREY);
+  }
+  M5.Display.fillTriangle(cx+3,cy-4,cx+5,cy-1,cx+1,cy-1,TFT_LIGHTGREY);
+  drawSettingsCog(160,234);
+  // Actual line followed by a dashed projection: the forecast shortcut.
+  uint16_t forecastColor=showForecast?TFT_CYAN:TFT_DARKGREY;
+  M5.Display.drawLine(253,238,256,234,forecastColor);
+  M5.Display.drawLine(256,234,259,236,forecastColor);
+  M5.Display.drawFastVLine(259,230,9,TFT_DARKGREY);
+  M5.Display.drawLine(261,234,262,233,forecastColor);
+  M5.Display.drawLine(264,232,265,231,forecastColor);
+  M5.Display.fillTriangle(268,229,268,232,265,229,forecastColor);
 }
 void draw() {
   M5.Display.fillScreen(TFT_BLACK);
@@ -807,16 +831,16 @@ void draw() {
   }
   M5.Display.setTextColor(TFT_LIGHTGREY,TFT_BLACK);
   M5.Display.setCursor(315-M5.Display.textWidth(modeText),layout::BASAL_Y);M5.Display.print(modeText);
-  String err=*ui.glucoseError?String("SGV: ")+ui.glucoseError:*ui.statusError?String("AAPS: ")+ui.statusError:*ui.treatmentError?String("Treat: ")+ui.treatmentError:ui.treatments.limited?"Treatments limited; reduce graph hours":"A refresh  B units  C forecasts";
+  String err=*ui.glucoseError?String("SGV: ")+ui.glucoseError:*ui.statusError?String("AAPS: ")+ui.statusError:*ui.treatmentError?String("Treat: ")+ui.treatmentError:ui.treatments.limited?"Treatments limited; reduce graph hours":"";
   M5.Display.setTextSize(1);
   if (M5.Display.textWidth(err)>267) {
     while (err.length() && M5.Display.textWidth(err+"...")>267) err.remove(err.length()-1);
     err+="...";
   }
   bool footerWarning=*ui.glucoseError || *ui.statusError || *ui.treatmentError || ui.treatments.limited;
-  line(layout::FOOTER_Y,err,footerWarning?TFT_ORANGE:TFT_LIGHTGREY);
+  if(footerWarning) line(layout::FOOTER_Y,err,TFT_ORANGE);
+  else drawFooterControls();
   drawLiveFields(now,true);
-  drawSettingsCog();
   drawSpeakerIndicator(true);
   drawPowerIndicator(true);
   drawWifiIndicator(true);
@@ -985,20 +1009,18 @@ void loop() {
     const auto &touch=M5.Touch.getDetail(i);if(!touch.wasPressed()) continue;
     if(settingsOpen) settingsTouch(touch.x,touch.y);
     else if(touch.y>=0 && touch.y<28) {
-      if(touch.x>=148 && touch.x<174) {settingsOpen=true;drawSettings();}
-      else if(touch.x>=174 && touch.x<200) toggleGlucoseAlerts();
+      if(touch.x>=174 && touch.x<200) toggleGlucoseAlerts();
     }
     break;
   }
   bool a=M5.BtnA.wasPressed(),b=M5.BtnB.wasPressed(),c=M5.BtnC.wasPressed();
-  bool unitsPressed=false,forecastPressed=false;
-  if(settingsOpen) {if(a) closeSettings();}
+  bool forecastPressed=false;
+  if(settingsOpen) {if(a || b) closeSettings();}
   else {
     if(a) xTaskNotifyGive(networkTask);
-    unitsPressed=b;forecastPressed=c;
-    if(b) mmol=!mmol;
-    if(c) showForecast=!showForecast;
-    if(b || c) saveDisplaySettings();
+    if(b) {settingsOpen=true;drawSettings();}
+    forecastPressed=c && !b;
+    if(forecastPressed) {showForecast=!showForecast;saveDisplaySettings();}
   }
   bool received=xQueueReceive(updates,&ui,0)==pdTRUE;
   if (received) {lastAppliedAt=millis();haveApplied=true;}
@@ -1013,7 +1035,7 @@ void loop() {
     int state=portalState.load(),wifi=int(WiFi.status());
     if(state!=previousPortal || wifi!=previousWifi) {drawSettings();previousPortal=state;previousWifi=wifi;}
   } else {
-    if(!rendered || dataChanged || timedChanged || unitsPressed || forecastPressed) draw();
+    if(!rendered || dataChanged || timedChanged || forecastPressed) draw();
     else if(newSecond) drawLiveFields(now);
     drawPowerIndicator();drawWifiIndicator();drawActivityIndicator();
   }

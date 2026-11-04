@@ -155,7 +155,7 @@ Project source is MIT licensed; dependencies retain their own licenses.
 
 ## On-device configuration
 
-The cog beside the speaker opens quick settings. History, units, forecasts and
+Button B (the bottom-center cog) opens quick settings. History, units, forecasts and
 sound persist across restarts. Wi-Fi setup starts a temporary protected hotspot
 with a phone-accessible form, tests new credentials and saves them only after
 successful connection. See [SETTINGS.md](SETTINGS.md) for setup and limits.

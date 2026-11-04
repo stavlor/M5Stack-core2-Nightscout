@@ -176,3 +176,13 @@ and private configuration/build/log exclusions were verified. Private configured
 string values were checked against archive contents without printing them.
 The bundle contains no configured binary. A fresh production build and physical
 settings-flow validation remain unconfirmed by this packaging task.
+
+## Bottom shortcut update
+
+B now opens/closes settings instead of changing units. Units remain in the saved
+settings menu. The top cog/touch target is removed. Bottom hints show A with a
+refresh arrow, B with a cog, and C with a solid/dashed projection icon (cyan when
+enabled, gray off). Their bounds fit y229..239 and x38..268, outside the activity
+rectangle starting x278. Footer errors still take priority over hints. These
+reversible UI changes were inspected in source; no additional fixture tests were
+added. Firmware build and physical icon/button validation remain pending.

@@ -25,10 +25,9 @@ basal/mode 216 and footer 231 on the 320x240 landscape display.
 
 | Control | Action |
 | --- | --- |
-| Cog left of speaker | Open [quick settings](SETTINGS.md) |
-| A, lower left | Request refresh; Back while settings are open |
-| B, center | Toggle mg/dL / mmol/L; saved across reboot |
-| C, lower right | Toggle forecasts; saved across reboot, initially enabled |
+| A, lower left, circular-arrow icon | Request refresh; Back while settings are open |
+| B, center, cog icon | Open/close [quick settings](SETTINGS.md); units are changed there |
+| C, lower right, projection-graph icon | Toggle forecasts; cyan enabled, gray disabled; saved across reboot |
 | Speaker icon left of power | Toggle all audible alerts; saved across reboot |
 
 Speaker cyan/blue means enabled; a red slash means muted. Its touch area is
@@ -137,3 +136,11 @@ and glucose trace colors retain their existing settings.
 Thin muted-gray dividers frame the two upper legend rows (y49 and y70) and
 the lower treatment/time label block (y153 and y192). They occupy the existing
 spacing; graph bounds, text positions and metric rows are unchanged.
+
+The top-bar cog has moved to the bottom-center B shortcut. Footer icons are drawn
+with native lines/triangles/circles, avoiding font-symbol dependencies. The C icon
+shows a solid history line and dashed projection. Warning/error text temporarily
+replaces shortcut hints as before; button actions remain available. Activity stays
+at the lower right in its separate rectangle. There is no Units shortcut on B;
+open settings to change units. Button B also closes settings (and cancels active
+Wi-Fi setup), as do Back and button A.
