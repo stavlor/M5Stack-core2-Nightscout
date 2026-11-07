@@ -1,3 +1,15 @@
+# Socket.IO source update - 2026-11-06
+
+- Adds automatic secure Nightscout v3 /storage subscriptions for entries,
+  device status and treatments using the existing read-only token.
+- Mutation notifications trigger debounced HTTPS refreshes; configured polling
+  remains the fallback. TLS validation and PSRAM allocation remain enabled.
+- Pins WebSockets 2.7.1 and adds protocol, heartbeat and timer tests: 163 total
+  host checks pass. Core2 production build succeeds. Desktop live subscription
+  and heartbeat verification pass; on-device socket testing is pending.
+- See SOCKETIO.md for compatibility and limitations. Existing published GitHub
+  releases are unchanged by this local source update.
+
 # Core2 Nightscout dashboard — 2026-11-04
 
 Graph-focused display, LAN configuration portal and TLS reliability update.

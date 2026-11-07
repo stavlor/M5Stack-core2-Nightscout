@@ -11,11 +11,27 @@
 #include "runtime_settings.h"
 #include "tls_diagnostics.h"
 #include "tls_anchor_policy.h"
+#include "socketio_protocol.h"
 // Runs on the same ESP32 framework and ArduinoJson version as production.
 inline int runParserTests() {
   unsigned passed=0,failed=0;
   auto check=[&](bool b,const char *name){Serial.printf("%s %s\n",b?"PASS":"FAIL",name); b?++passed:++failed;};
   DynamicJsonDocument doc(16384);
+  {
+    uint32_t timeout=0;
+    auto packet=[&](const char *p){return nssocket::parse(p,strlen(p),timeout);};
+    using nssocket::Packet;
+    check(packet("0{\"sid\":\"test\",\"pingInterval\":25000,\"pingTimeout\":20000}")==Packet::Open && timeout==45000,"Engine.IO heartbeat negotiation");
+    check(packet("0{\"sid\":\"x\",\"pingInterval\":4294967295,\"pingTimeout\":1}")==Packet::Close,"Engine.IO rejects heartbeat overflow");
+    check(packet("0{}")==Packet::Close && packet("2")==Packet::Ping,"Engine.IO requires valid open and answers ping");
+    check(packet("40/storage,{\"sid\":\"test\"}")==Packet::Connected,"Socket.IO storage namespace connection");
+    check(packet("43/storage,1[{\"success\":true,\"collections\":[\"entries\"]}]")==Packet::Subscribed,"Socket.IO subscription acknowledgement");
+    check(packet("43/storage,1[{\"success\":false}]")==Packet::Close,"Socket.IO denied subscription fails closed");
+    check(packet("42/storage,[\"create\",{\"colName\":\"entries\"}]")==Packet::Changed && packet("42/storage,[\"update\",{}]")==Packet::Changed && packet("42/storage,[\"delete\",{}]")==Packet::Changed,"Socket.IO storage mutation notifications");
+    check(packet("42/other,[\"create\",{}]")==Packet::Ignore && packet("42/storage,[\"alarm\",{}]")==Packet::Ignore,"Socket.IO ignores unrelated namespaces/events");
+    check(packet("44/storage,{\"message\":\"denied\"}")==Packet::Close,"Socket.IO namespace error disconnects");
+    check(nssocket::due(20,0xfffffff0u,30) && !nssocket::due(20,0xfffffff0u,40),"Socket notification debounce survives clock wrap");
+  }
   const int64_t now=1793102400; // 2026-10-27T12:00:00Z
   static model::History h;
   model::Status s;

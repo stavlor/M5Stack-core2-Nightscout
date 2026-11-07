@@ -3,6 +3,7 @@
 #include <WiFiClientSecure.h>
 #include "secure_client.h"
 #include "ca_bundle_info.h"
+#include "nightscout_socket.h"
 #include <HTTPClient.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
@@ -377,24 +378,27 @@ void runWifiSetup() {
 }
 void worker(void*) {
   static Snapshot s;
+  static NightscoutSocket live;
   unsigned failures=0;
   WiFi.persistent(false);WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(false);
   String lastTimezone,lastNtp1,lastNtp2;
   for (;;) {
     xSemaphoreTake(networkGate,portMAX_DELAY);
     if(portalRequested.exchange(false)) {
+      live.stop();
       if(portalCancel.load()) portalState.store(7);
       else {apSetupActive.store(true);runWifiSetup();apSetupActive.store(false);}
     }
     uint32_t revision,epoch;currentSettings(netSettings,revision,&epoch);
     if(s.connectionEpoch!=epoch) {
+      live.stop();
       resetSnapshot(s);s.connectionEpoch=epoch;jwt="";jwtExpiry=0;authCooling=false;
     }
     if(lastTimezone!=netSettings.timezone || lastNtp1!=netSettings.ntp1 || lastNtp2!=netSettings.ntp2) {
       configTzTime(netSettings.timezone,netSettings.ntp1,netSettings.ntp2);
       lastTimezone=netSettings.timezone;lastNtp1=netSettings.ntp1;lastNtp2=netSettings.ntp2;
     }
-    if(reconnectRequested.exchange(false)) {vTaskDelay(pdMS_TO_TICKS(500));WiFi.disconnect(false);}
+    if(reconnectRequested.exchange(false)) {live.stop();vTaskDelay(pdMS_TO_TICKS(500));WiFi.disconnect(false);}
     pollHours=netSettings.hours;
     networkBusy.store(true);
     bool good=false;
@@ -444,11 +448,22 @@ void worker(void*) {
         }
     }
     networkBusy.store(false);
+    live.fetched();
+    if(WiFi.status()==WL_CONNECTED && configured() && time(nullptr)>=1767225600)
+      live.configure(netSettings.url,netSettings.token,netSettings.v3,caBundleStart);
+    else live.stop();
     xQueueOverwrite(updates,&s);
     xSemaphoreGive(networkGate);
     failures=good?0:std::min(failures+1,4u);
     unsigned wait=good?netSettings.poll:std::min(15u*(1u<<failures),300u);
-    ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(wait*1000));
+    uint32_t waiting=millis();
+    while(!nssocket::due(millis(),waiting,wait*1000u)) {
+      if(ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(50)))break;
+      if(xSemaphoreTake(networkGate,pdMS_TO_TICKS(20))==pdTRUE) {
+        bool changed=live.tick();xSemaphoreGive(networkGate);
+        if(changed)break;
+      }
+    }
   }
 }
 bool testNightscoutConnection(const runtimecfg::Settings &settings,char *error,size_t cap) {

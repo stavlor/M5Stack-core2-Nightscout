@@ -121,3 +121,22 @@ validation and sustained concurrent portal/polling memory use. Verify Graph
 focus at light/dense treatment loads, both units, threshold labels, forecasts,
 stale warning, metric fonts and green refresh icon. Check actual audio/mute and
 low reminder timing, stale data/recovery, USB/battery/Wi-Fi and partial redraws.
+
+## Socket.IO follow-up - 2026-11-06
+
+The current host suite passes 163 checks (ten new protocol cases). The production
+Core2 build succeeds with WebSockets 2.7.1 and the pinned ESP32 framework.
+A desktop live probe verified WSS TLS/upgrade, read-only storage subscription to
+entries/devicestatus/treatments and two Engine.IO heartbeat replies. No mutation
+notifications arrived during that 50-second window, so live mutation-triggered
+refresh behavior is not yet verified. Hardware socket behavior and long-term
+reconnect stability remain to be tested. See SOCKETIO.md.
+
+## Core2 upload and startup - 2026-11-06
+
+Uploaded the Socket.IO production build to COM3; esptool verified flash hashes.
+After reboot, serial capture confirmed successful SGV, AAPS and treatment body
+reads, followed by `Nightscout Socket.IO: storage subscribed` and another
+successful three-resource reconciliation fetch. No TLS failure appeared during
+this short capture. Extended heartbeat/reconnect and mutation-event soak testing
+remain outstanding. Private device logs are excluded from source archives.

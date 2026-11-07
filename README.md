@@ -36,7 +36,7 @@ an already saved profile; edit it in the portal or erase flash and re-upload.
 
 See [RELEASE.md](RELEASE.md) for portable flashing options and checksums.
 The workstation-specific helper in the surrounding outputs directory remains
-available locally: it runs the current 153 C++ host fixtures before building and
+available locally: it runs the current 163 C++ host fixtures before building and
 uploading to COM3. The portable helper runs normal PlatformIO builds; it does not
 automatically run desktop C++ fixtures.
 
@@ -150,3 +150,11 @@ node test/test_ca_bundle_node.cjs
 Project source is MIT licensed; dependencies retain their own licenses.
 
 Node 18+ is optional and is only needed for the portal browser-controller tests.
+
+## Live Socket.IO updates
+
+V3 mode automatically subscribes to Nightscout's secure /storage socket for
+entries, AAPS device status and treatments. Notifications trigger an early HTTPS
+refresh; configured polling remains the fallback. No new token or settings are
+needed. See [SOCKETIO.md](SOCKETIO.md) for compatibility, timing, security,
+build-time disable and diagnostics.

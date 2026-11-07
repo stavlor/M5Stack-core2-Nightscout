@@ -115,3 +115,11 @@ A longer window fills after a successful fetch; sparse history retains gaps.
 The settings screen temporarily uses at least brightness 20/255 so B can recover
 access even when the saved dashboard brightness is zero. Closing settings restores
 the configured brightness.
+
+## Live Socket.IO updates
+
+V3 mode automatically subscribes to Nightscout's secure /storage socket for
+entries, AAPS device status and treatments. Notifications trigger an early HTTPS
+refresh; configured polling remains the fallback. No new token or settings are
+needed. See [SOCKETIO.md](SOCKETIO.md) for compatibility, timing, security,
+build-time disable and diagnostics.
